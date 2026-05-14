@@ -522,6 +522,19 @@ def _fix_content_model(body_xml: str) -> str:
                     elem.append(c)
                 modified = True
 
+        # Fix 6: No nested sections. DITA forbids <section> inside <section>.
+        if tag == "section":
+            nested = [c for c in elem if etree.QName(c.tag).localname == "section"]
+            if nested:
+                parent = elem.getparent()
+                if parent is not None:
+                    # Move nested sections to be siblings of the current section
+                    idx = list(parent).index(elem) + 1
+                    for n in reversed(nested):
+                        elem.remove(n)
+                        parent.insert(idx, n)
+                    modified = True
+
     if not modified:
         return body_xml
 

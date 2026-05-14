@@ -334,9 +334,20 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
 
         dita_bin = shutil.which("dita")
         if not dita_bin:
-            matches = sorted(Path.home().glob("dita-ot*/bin/dita"), reverse=True)
-            if matches:
-                dita_bin = str(matches[0])
+            # Check common hackathon paths
+            search_paths = [
+                Path.home() / "dita-ot-4.3.1/bin/dita",
+                Path.home() / "dita-ot/bin/dita",
+            ]
+            for p in search_paths:
+                if p.exists():
+                    dita_bin = str(p)
+                    break
+            
+            if not dita_bin:
+                matches = sorted(Path.home().glob("dita-ot*/bin/dita"), reverse=True)
+                if matches:
+                    dita_bin = str(matches[0])
 
         if dita_bin and ditamap:
             html5_dir = out_dir / "html5"
