@@ -12,13 +12,21 @@ function ProjectExplorer({ results, selectedIdx, onSelectResult, selectedTopicId
     );
   }, [results, search]);
 
+  const totalTopics = results.reduce((a, r) => a + (r.topics?.length || 0), 0);
+
   return (
     <div className="card project-explorer">
+      <div className="project-explorer__header">
+        <div className="project-explorer__title">Projects</div>
+        <div className="project-explorer__count">
+          {results.length} doc{results.length === 1 ? '' : 's'} · {totalTopics} topic{totalTopics === 1 ? '' : 's'}
+        </div>
+      </div>
       <div className="search-container">
         <input
           type="text"
           className="search-input"
-          placeholder="Search docs or topics..."
+          placeholder="Filter…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
