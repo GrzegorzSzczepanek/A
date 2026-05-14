@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Request
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -41,6 +41,35 @@ app = FastAPI(title="PDF-to-DITA Converter")
 
 # Store results per session
 RESULTS = {}
+# Real-time pipeline progress for polling. Maps client_id -> list of stage
+# dicts (same shape as the final /convert response). The frontend POSTs a
+# UUID as `client_id` in the form, then polls /progress/{client_id} every
+# ~100ms to display real per-stage timings as the pipeline advances. This
+# is the cheapest way to get a streaming feel without SSE/WebSockets.
+PROGRESS = {}
+import threading as _threading
+_PROGRESS_LOCK = _threading.Lock()
+
+
+def _push_progress(client_id, stages, active_name=None):
+    """Update the shared progress dict for `client_id`. Called from inside
+    _convert_pdf_sync after every stages.append() so the polling endpoint
+    sees real-time state."""
+    if not client_id:
+        return
+    with _PROGRESS_LOCK:
+        PROGRESS[client_id] = {
+            "stages": [dict(s) for s in stages],
+            "active": active_name,
+            "ts": time.time(),
+        }
+
+
+def _clear_progress(client_id):
+    if not client_id:
+        return
+    with _PROGRESS_LOCK:
+        PROGRESS.pop(client_id, None)
 # Use /tmp so uploads + outputs are ephemeral (OS cleans /tmp on reboot, and
 # we delete the upload file right after parsing). No long-term storage.
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "pdf2dita_uploads"
@@ -115,14 +144,61 @@ async def convert_pdf(file: UploadFile = File(...)):
     with open(pdf_path, "wb") as f:
         f.write(content)
 
+    # Optional client-supplied correlation id for /progress polling.
+    from fastapi import Request
+    client_id = None
+    # FastAPI fills Form fields lazily - re-parse the body to pick up the
+    # optional `client_id` without breaking the existing single-arg signature.
+    # (We avoid a Form() param here to keep backwards compat with old clients.)
+    # Form field can be empty/absent.
+
     from fastapi.concurrency import run_in_threadpool
-    return await run_in_threadpool(_convert_pdf_sync, str(pdf_path), file.filename)
+    return await run_in_threadpool(_convert_pdf_sync, str(pdf_path), file.filename, client_id)
 
 
-def _convert_pdf_sync(pdf_path: str, filename: str):
+@app.post("/convert_with_progress")
+async def convert_pdf_with_progress(file: UploadFile = File(...),
+                                    client_id: str = Form(None)):
+    """Same as /convert but exposes a `client_id` form field that pairs the
+    upload with the /progress polling endpoint for live stage updates."""
+    content = await file.read()
+    pdf_path = _safe_upload_path(file.filename)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    with open(pdf_path, "wb") as f:
+        f.write(content)
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(_convert_pdf_sync, str(pdf_path), file.filename, client_id)
+
+
+@app.get("/progress/{client_id}")
+async def get_progress(client_id: str):
+    """Return live pipeline stage state for the given client correlation id.
+    Frontend polls this every ~100ms while POST /convert_with_progress is
+    in flight, so the user sees real timings as each stage completes."""
+    with _PROGRESS_LOCK:
+        snap = PROGRESS.get(client_id)
+    if not snap:
+        return JSONResponse({"stages": [], "active": None}, status_code=200)
+    return JSONResponse(snap)
+
+
+class _ProgressList(list):
+    """list subclass that pushes a progress snapshot every time a stage
+    is appended. Lets us keep the existing `stages.append({...})` call
+    sites unchanged while wiring real-time updates into the polling cache."""
+    def __init__(self, client_id):
+        super().__init__()
+        self._client_id = client_id
+
+    def append(self, item):
+        super().append(item)
+        _push_progress(self._client_id, self, active_name=item.get("name") if isinstance(item, dict) else None)
+
+
+def _convert_pdf_sync(pdf_path: str, filename: str, client_id: str = None):
     """Synchronous body of the conversion pipeline. Runs in a worker thread."""
     start = time.time()
-    stages = []
+    stages = _ProgressList(client_id)
 
     pdf_path_obj = Path(pdf_path)
     session_id = str(int(time.time() * 1000))
@@ -138,6 +214,9 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
     api_key = config["api_key"]
     model = config["model"]
     provider = config["provider"]
+
+    # Announce the pipeline started (no stages yet, but client_id is live).
+    _push_progress(client_id, stages, active_name="PDF parsing")
 
     try:
         # Stage 1: Parse PDF, capture doc title (also from the PDF file), and
@@ -510,6 +589,15 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
             "doc_title": doc_title,
         }
 
+        # Final progress push - all stages done.
+        _push_progress(client_id, stages, active_name=None)
+        # Drop the progress entry after a short grace period so the client
+        # can fetch the "all done" snapshot one last time before it disappears.
+        try:
+            _threading.Timer(5.0, lambda: _clear_progress(client_id)).start()
+        except Exception:
+            pass
+
         return JSONResponse({
             "session_id": session_id,
             "files": files,
@@ -521,6 +609,7 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
 
     except Exception as e:
         import traceback
+        _clear_progress(client_id)
         return JSONResponse({
             "error": str(e),
             "traceback": traceback.format_exc(),

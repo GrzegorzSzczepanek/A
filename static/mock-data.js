@@ -382,6 +382,10 @@ window.MockAPI = {
     'DITA generation':   'transform',
     'File emission':     'export',
     'XML validation':    'validate',
+    // DITA-OT HTML5 build is part of the "validate" UI step. The UI only
+    // shows one validation node, but the backend logs both XML and DITA-OT
+    // checks separately. We surface HTML5-build timing on the validate node.
+    'HTML5 build':       'validate',
   },
 
   async runPipeline(onStageUpdate, onLog, input) {
@@ -396,74 +400,89 @@ window.MockAPI = {
     const stages = STAGES.map(s => ({ ...s, status: 'queued', time: null }));
     onStageUpdate([...stages]);
 
-    // Backend does NOT stream stage updates - it sends them all at once
-    // when /convert returns. We do two things while waiting:
-    //   1. "ticker": every 200ms, recompute the active stage's elapsed
-    //      seconds from a wall-clock timestamp so the user sees a live
-    //      counter instead of "...".
-    //   2. "advance": every ~1.8s, optimistically mark the active stage
-    //      done (locking its time) and promote the next stage.
-    // When the response arrives, real backend timings replace whatever
-    // the optimistic clock guessed.
-    let activeIdx = 0;
+    // Real per-stage timings via /progress polling. Frontend generates a
+    // correlation id, POSTs it with the file, and meanwhile polls the
+    // server every 100ms for the live stages array (which the pipeline
+    // updates after every stage.append() server-side).
+    const clientId = (crypto.randomUUID ? crypto.randomUUID()
+                     : 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+
     stages[0].status = 'active';
-    stages[0].time = 0;
+    stages[0].time = 0.0;
     let activeStartedAt = Date.now();
     onStageUpdate(stages.map(s => ({ ...s })));
 
     if (onLog) onLog({ stage: 'System', msg: `Starting pipeline for ${files.length} file(s)...`, time: '-' });
-    if (onLog) onLog({ stage: stages[0].name, msg: `Initializing ${stages[0].name.toLowerCase()}...`, time: '-' });
 
-    const ticker = setInterval(() => {
-      const elapsed = (Date.now() - activeStartedAt) / 1000;
-      // Show one decimal so the counter visibly moves.
-      stages[activeIdx].time = elapsed.toFixed(1);
-      onStageUpdate(stages.map(s => ({ ...s })));
-    }, 200);
-
-    const advance = setInterval(() => {
-      if (activeIdx < stages.length - 1) {
-        // Lock the currently active stage's time at the wall-clock value
-        // it had just before we advance.
-        stages[activeIdx].status = 'done';
-        stages[activeIdx].time = ((Date.now() - activeStartedAt) / 1000).toFixed(1);
-        activeIdx += 1;
-        stages[activeIdx].status = 'active';
-        stages[activeIdx].time = 0;
-        activeStartedAt = Date.now();
-        onStageUpdate(stages.map(s => ({ ...s })));
-
-        if (onLog) {
-          onLog({
-            stage: stages[activeIdx].name,
-            msg: `Running ${stages[activeIdx].name.toLowerCase()}...`,
-            time: '-'
+    let pollHandle = null;
+    const seenLogs = new Set();
+    const pollProgress = async () => {
+      try {
+        const r = await fetch('/progress/' + clientId);
+        if (!r.ok) return;
+        const snap = await r.json();
+        const backendStages = snap.stages || [];
+        const stageMap = this._BACKEND_STAGE_MAP;
+        // Mark every backend-reported stage as done with its real timing.
+        for (const bs of backendStages) {
+          const uiId = stageMap[bs.name];
+          if (!uiId) continue;
+          const s = stages.find(x => x.id === uiId);
+          if (s && s.status !== 'done') {
+            s.status = 'done';
+            s.time = bs.time != null ? Number(bs.time).toFixed(2) : s.time;
+            const logKey = uiId + ':done';
+            if (onLog && bs.detail && !seenLogs.has(logKey)) {
+              seenLogs.add(logKey);
+              onLog({ stage: bs.name, msg: bs.detail, time: s.time });
+            }
+          }
+        }
+        // Advance the "active" pointer to the first not-yet-done stage and
+        // reset its local clock so the live counter is accurate.
+        const firstActiveIdx = stages.findIndex(s => s.status !== 'done' && s.status !== 'error');
+        if (firstActiveIdx >= 0) {
+          stages.forEach((s, i) => {
+            if (i === firstActiveIdx) {
+              if (s.status !== 'active') {
+                s.status = 'active';
+                activeStartedAt = Date.now();
+              }
+              const elapsed = (Date.now() - activeStartedAt) / 1000;
+              s.time = elapsed.toFixed(1);
+            }
           });
         }
+        onStageUpdate(stages.map(s => ({ ...s })));
+      } catch (e) {
+        // Network blip while polling - ignore, next tick retries.
       }
-    }, 1800);
+    };
+    pollHandle = setInterval(pollProgress, 100);
 
     let data;
     try {
       const form = new FormData();
+      form.append('client_id', clientId);
       if (isBatch) {
         files.forEach(f => form.append('files', f));
         const resp = await fetch('/batch', { method: 'POST', body: form });
         data = await resp.json();
       } else {
         form.append('file', files[0]);
-        const resp = await fetch('/convert', { method: 'POST', body: form });
+        const resp = await fetch('/convert_with_progress', { method: 'POST', body: form });
         data = await resp.json();
       }
     } catch (e) {
-      clearInterval(advance);
-      clearInterval(ticker);
-      stages[activeIdx].status = 'error';
+      clearInterval(pollHandle);
+      const a = stages.findIndex(s => s.status === 'active');
+      if (a >= 0) stages[a].status = 'error';
       onStageUpdate(stages.map(s => ({ ...s })));
       throw e;
     }
-    clearInterval(advance);
-    clearInterval(ticker);
+    clearInterval(pollHandle);
+    // One last poll to catch any final stage that landed between ticks.
+    await pollProgress();
 
     if (data.error) {
       stages[activeIdx].status = 'error';
