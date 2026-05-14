@@ -100,10 +100,37 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 import mimetypes
 mimetypes.add_type("text/javascript", ".jsx")
 
-# Serve the new Claude-Design React UI from /static/*. The root path serves
-# the index.html that loads all the .jsx files via Babel standalone.
+# Serve the new Claude-Design React UI from /static/*. We use a custom
+# StaticFiles subclass that disables HTTP caching — without it, browsers
+# happily keep an old mock-data.js around (with the old 1.8s optimistic
+# stage advance) and ignore deploys until a hard refresh.
+class _NoCacheStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if 200 <= getattr(resp, "status_code", 500) < 400:
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+        return resp
+
 if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", _NoCacheStatic(directory=str(STATIC_DIR)), name="static")
+
+
+def _asset_version() -> str:
+    """A short hash of the static file mtimes used as `?v=` cache-buster
+    so even browsers that ignore Cache-Control headers (or proxies that
+    don't honor them) still fetch a fresh copy after each deploy."""
+    try:
+        mtimes = sorted(
+            p.stat().st_mtime for p in STATIC_DIR.glob("*.*")
+            if p.suffix in {".js", ".jsx", ".html", ".css"}
+        )
+    except Exception:
+        return str(int(time.time()))
+    if not mtimes:
+        return "0"
+    return str(int(mtimes[-1]))  # newest mtime wins
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -112,9 +139,18 @@ async def index():
     # the same directory. Falls back to the legacy demo_ui.html if static is
     # missing (e.g. fresh clone before the asset copy step).
     idx = STATIC_DIR / "index.html"
-    if idx.exists():
-        return idx.read_text()
-    return Path("demo_ui.html").read_text()
+    if not idx.exists():
+        return Path("demo_ui.html").read_text()
+    html = idx.read_text()
+    # Append `?v={mtime}` to every internal /static asset URL. New version
+    # number on every deploy = new URL = guaranteed cache miss.
+    ver = _asset_version()
+    html = re.sub(
+        r'(src|href)="(/static/[^"?]+)"',
+        lambda m: f'{m.group(1)}="{m.group(2)}?v={ver}"',
+        html,
+    )
+    return html
 
 
 
