@@ -25,7 +25,7 @@ from typing import Optional
 
 # ── HTTP with retry/backoff ──────────────────────────────────────────────────
 
-RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+RETRY_STATUSES = {403, 408, 425, 429, 500, 502, 503, 504}
 MAX_RETRIES = 5
 BACKOFF_BASE = 2.0
 BACKOFF_CAP = 65.0

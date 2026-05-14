@@ -137,12 +137,75 @@ def _is_header(text: str) -> bool:
     return len(t) < 60 and not t.endswith(".")
 
 
+IMAGE_TARGET_WIDTH = 1000  # px
+IMAGE_MAX_BYTES = 200 * 1024  # 200 KB cap per spec
+
+
+def _optimize_image(path: Path) -> None:
+    """Resize image to <=1000px wide and compress until <=200KB on disk.
+
+    Operates in place. For PNGs that won't shrink below the byte cap even at
+    width 1000, we re-encode as JPEG (quality steps 85→60). Alpha channels are
+    flattened on a white background before JPEG fallback. Silent no-op on any
+    error — image extraction shouldn't break the whole pipeline.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return
+    try:
+        with Image.open(path) as im:
+            im.load()
+            orig_mode = im.mode
+            # 1. Width cap
+            if im.width > IMAGE_TARGET_WIDTH:
+                ratio = IMAGE_TARGET_WIDTH / im.width
+                new_size = (IMAGE_TARGET_WIDTH, max(1, int(im.height * ratio)))
+                im = im.resize(new_size, Image.LANCZOS)
+
+            ext = path.suffix.lower()
+
+            # 2. Try keeping the original format first (best quality for PNG line-art).
+            if ext in (".png", ".gif"):
+                im.save(path, optimize=True)
+                if path.stat().st_size <= IMAGE_MAX_BYTES:
+                    return
+                # Fall through to JPEG fallback for photographic content.
+                if orig_mode in ("RGBA", "LA", "P"):
+                    bg = Image.new("RGB", im.size, (255, 255, 255))
+                    bg.paste(im.convert("RGBA"), mask=im.convert("RGBA").split()[-1])
+                    im = bg
+                else:
+                    im = im.convert("RGB")
+                jpg_path = path.with_suffix(".jpg")
+                for quality in (85, 75, 65, 60):
+                    im.save(jpg_path, "JPEG", quality=quality, optimize=True, progressive=True)
+                    if jpg_path.stat().st_size <= IMAGE_MAX_BYTES:
+                        break
+                path.unlink(missing_ok=True)
+                return
+
+            # JPEG path
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+            for quality in (85, 75, 65, 60, 50):
+                im.save(path, "JPEG", quality=quality, optimize=True, progressive=True)
+                if path.stat().st_size <= IMAGE_MAX_BYTES:
+                    return
+    except Exception:
+        return
+
+
 def extract_images(pdf_path: str, output_dir: str) -> dict[int, list[str]]:
     """Extract images from PDF.
 
     Primary path: pypdf (pure Python, already in requirements).
     Fallback: pdfimages (poppler-utils) if available.
     Returns {page_num: [image_paths]}.
+
+    After extraction, each image is optimized: width capped at
+    IMAGE_TARGET_WIDTH px, byte size capped at IMAGE_MAX_BYTES (PNGs that
+    can't compress under the cap are re-encoded as JPEG).
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +236,7 @@ def extract_images(pdf_path: str, output_dir: str) -> dict[int, list[str]]:
                 except Exception:
                     continue
         if page_map:
+            _optimize_extracted(page_map)
             return page_map
     except Exception:
         page_map = {}
@@ -205,7 +269,26 @@ def extract_images(pdf_path: str, output_dir: str) -> dict[int, list[str]]:
         for f in sorted(output_dir.glob("img-*.png")):
             page_map.setdefault(0, []).append(str(f))
 
+    _optimize_extracted(page_map)
     return page_map
+
+
+def _optimize_extracted(page_map: dict[int, list[str]]) -> None:
+    """Run image optimization on every path recorded in `page_map`. The map
+    keys may be reassigned if a file extension changes (PNG→JPEG fallback)."""
+    for page_num, paths in list(page_map.items()):
+        new_paths = []
+        for p in paths:
+            pth = Path(p)
+            _optimize_image(pth)
+            # JPEG fallback may have renamed .png → .jpg
+            if not pth.exists():
+                jpg = pth.with_suffix(".jpg")
+                if jpg.exists():
+                    new_paths.append(str(jpg))
+                    continue
+            new_paths.append(str(pth))
+        page_map[page_num] = new_paths
 
 
 def parse_pdf(pdf_path: str, image_output_dir: str = None) -> list[Block]:

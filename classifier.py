@@ -20,8 +20,11 @@ from typing import Optional
 CACHE_DIR = Path(__file__).parent / ".cache"
 
 
-def _cache_key(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+def _cache_key(text: str, system_prompt: str = "") -> str:
+    """Hash includes the system prompt so cached responses get invalidated
+    whenever the prompt rules change (e.g. new fields like shortdesc/keywords)."""
+    payload = system_prompt + "\x1f" + text
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def _cache_get(key: str) -> Optional[dict]:
@@ -66,9 +69,10 @@ Ordered lists:
 Notes:
   <note class="- topic/note ">text</note>
 
-Figures with images:
-  <fig class="- topic/fig "><title class="- topic/title ">caption</title><image href="FILENAME" class="- topic/image "/></fig>
-  If the source PDF has no caption for the image, use the placeholder title "Sample Image" (NOT the filename, NOT "Figure 1").
+Figures with images (always include <alt> text — required for accessibility, DITA spec 3.2.2.1):
+  <fig class="- topic/fig "><title class="- topic/title ">caption</title><image href="FILENAME" class="- topic/image "><alt class="- topic/alt ">descriptive alt text</alt></image></fig>
+  - If the source PDF has no caption for the image, use the placeholder title "Sample Image" (NOT the filename, NOT "Figure 1").
+  - The <alt> text MUST describe what the image shows in 5–15 words. Infer from surrounding paragraphs. If genuinely unknown, use the topic title (e.g., "Illustration for {topic title}"). NEVER leave <alt> empty or omit it.
 
 Cross-references:
   <xref href="URL_OR_FILE" class="- topic/xref ">link text</xref>
@@ -157,23 +161,51 @@ Generate content wrapped in: <refbody class="- topic/body        reference/refbo
 
 CRITICAL: <p> CANNOT go directly inside <refbody>. Wrap all content in <section class="- topic/section ">.
 
-Tables use CALS format:
+Tables use CALS format. Follow this STRICT template — EVERY row MUST have EXACTLY `cols` <entry> elements, and EVERY <entry> MUST be explicitly closed with </entry>:
+
 <table class="- topic/table ">
   <tgroup cols="N" class="- topic/tgroup ">
     <colspec colname="c1" colnum="1" class="- topic/colspec "/>
-    <thead class="- topic/thead "><row class="- topic/row "><entry class="- topic/entry ">Header</entry></row></thead>
-    <tbody class="- topic/tbody "><row class="- topic/row "><entry class="- topic/entry ">Cell</entry></row></tbody>
+    <colspec colname="c2" colnum="2" class="- topic/colspec "/>
+    <!-- one <colspec> per column, colnum increments 1..N -->
+    <thead class="- topic/thead ">
+      <row class="- topic/row ">
+        <entry class="- topic/entry ">Header A</entry>
+        <entry class="- topic/entry ">Header B</entry>
+      </row>
+    </thead>
+    <tbody class="- topic/tbody ">
+      <row class="- topic/row ">
+        <entry class="- topic/entry ">Cell A1</entry>
+        <entry class="- topic/entry ">Cell B1</entry>
+      </row>
+      <row class="- topic/row ">
+        <entry class="- topic/entry ">Cell A2</entry>
+        <entry class="- topic/entry ">Cell B2</entry>
+      </row>
+    </tbody>
   </tgroup>
 </table>
 
+CRITICAL TABLE RULES (failing these breaks DITA-OT):
+- Count the columns in the source table. Set `cols="N"` to that exact count. Emit N <colspec> elements.
+- Every <row> must contain exactly N <entry> elements — no more, no less. Pad missing cells with an empty entry: `<entry class="- topic/entry "/>`.
+- Every <entry> MUST close with </entry>. Self-close empty cells as `<entry class="- topic/entry "/>` only — never leave a dangling open `<entry>`.
+- The opening sequence MUST be: <table> -> <tgroup> -> <colspec> (×N) -> <thead> -> <tbody>. Do NOT skip <colspec>.
+
 Use <uicontrol> for field names in settings tables.
-Use <option> for enumerated values (like CNAV, VNAV, etc.).
+Use <option> for enumerated values (like CNAV, VNAV, IMMM).
 
 ## Content Transformation Rules
 - Fix obvious typos (for example "Commisssion" -> "Commission", "prize comparison" -> "price comparison")
 - Replace "i.e." with "that is"
 - Replace "e.g." with "for example"
+- Replace "via" with "with" or "through" (whichever reads naturally; default "through")
 - Remove trailing "etc." or ", etc." from sentences (do not replace with anything). Also strip embedded ", etc." inside sentences.
+- **Convert passive voice to active voice** for instructional sentences. Examples:
+  * "Records are validated by the system" -> "The system validates records"
+  * "The fund is created by the user" -> "The user creates the fund" (or in tasks: "Create the fund")
+  * Passive is acceptable ONLY when the actor is genuinely unknown or irrelevant (e.g., "The file is generated nightly").
 - Preserve all original wording otherwise: do NOT rephrase or summarize
 - Preserve all numbers, dates, codes, and identifiers exactly
 - Preserve code block contents BYTE-FOR-BYTE: do not change indentation, spacing, quotes, or rewrite f-strings to .format() or vice versa. Copy the [CODE] block character-for-character into <codeblock>.
@@ -287,16 +319,29 @@ Header row cells (inside <thead>): plain text only, no <p>, no <uicontrol>.
 
 Do NOT flatten lists into inline text.
 
+## Topic prolog metadata (REQUIRED — DITA spec 3.2.1.6, 3.2.2.18)
+Every topic MUST have:
+
+1. **shortdesc**: a single-sentence summary of the topic (15–40 words). Active voice. Must reflect topic content (not the document or section). Do NOT start with "This topic..." / "This section...". Start with the subject.
+   - For concept: describe WHAT the thing is. Example: "The Master Fund panel configures entity-level fields used by 2a-7 money market processing."
+   - For task: describe WHAT THE USER ACHIEVES by doing the task. Use infinitive verb. Example: "Configure entity-level fields for each master fund that uses 2a-7 processing."
+   - For reference: describe WHAT THE LOOKUP CONTAINS. Example: "Field-by-field reference for 2a-7 processing settings on the Master Fund panel."
+
+2. **keywords**: 3–7 short keywords/phrases that describe the topic. Lower-case, no punctuation. Drawn from the source — pick salient nouns, product features, and field names. Example: ["master fund", "2a-7 processing", "money market", "entity fields"].
+
 ## Output Format
 Return ONLY a JSON object (no markdown fences, no preamble):
 {
   "topic_type": "concept" | "task" | "reference",
+  "shortdesc": "Single-sentence summary, 15–40 words.",
+  "keywords": ["keyword1", "keyword2", "keyword3"],
   "body_xml": "<conbody ...>...</conbody>",
   "reasoning": "brief explanation of classification"
 }
 
 The body_xml must be well-formed XML. Use &amp; for &, &lt; for <, &gt; for > in text content.
 Do NOT include <?xml?> declaration or <!DOCTYPE> in body_xml.
+The shortdesc must be plain text (no XML tags). The keywords must be a JSON array of plain strings.
 """
 
 
@@ -377,9 +422,9 @@ def classify_section(title: str, blocks: list[Block], api_key: str,
         product_name=product_name, topic_filenames=topic_filenames,
     )
 
-    # Check cache
+    # Check cache (system-prompt-aware key so rule changes invalidate)
     if use_cache:
-        key = _cache_key(user_prompt)
+        key = _cache_key(user_prompt, SYSTEM_PROMPT)
         cached = _cache_get(key)
         if cached:
             return cached
@@ -417,6 +462,8 @@ def classify_section(title: str, blocks: list[Block], api_key: str,
     if result is None:
         topic_match = re.search(r'"topic_type"\s*:\s*"(concept|task|reference)"', clean)
         reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]*)"', clean)
+        shortdesc_match = re.search(r'"shortdesc"\s*:\s*"([^"]*)"', clean)
+        keywords_match = re.search(r'"keywords"\s*:\s*(\[[^\]]*\])', clean)
 
         # body_xml: find the XML between body tags
         body_match = re.search(
@@ -425,9 +472,17 @@ def classify_section(title: str, blocks: list[Block], api_key: str,
         )
 
         if topic_match and body_match:
+            kws = []
+            if keywords_match:
+                try:
+                    kws = json.loads(keywords_match.group(1))
+                except json.JSONDecodeError:
+                    kws = []
             result = {
                 "topic_type": topic_match.group(1),
                 "body_xml": body_match.group(1),
+                "shortdesc": shortdesc_match.group(1) if shortdesc_match else "",
+                "keywords": kws,
                 "reasoning": reasoning_match.group(1) if reasoning_match else "regex extraction",
             }
 
@@ -436,8 +491,22 @@ def classify_section(title: str, blocks: list[Block], api_key: str,
         return {
             "topic_type": "concept",
             "body_xml": f'<conbody class="- topic/body  concept/conbody "><p class="- topic/p ">Content extraction failed.</p></conbody>',
+            "shortdesc": title,
+            "keywords": [],
             "reasoning": "Failed to parse LLM response"
         }
+
+    # Normalize new optional fields so downstream code can rely on their shape.
+    result.setdefault("shortdesc", "")
+    result.setdefault("keywords", [])
+    if not isinstance(result["keywords"], list):
+        result["keywords"] = []
+    # Drop empty/non-string keywords and trim each to <=40 chars.
+    result["keywords"] = [
+        str(k).strip().lower()[:40] for k in result["keywords"] if str(k).strip()
+    ][:7]
+    if isinstance(result.get("shortdesc"), str):
+        result["shortdesc"] = result["shortdesc"].strip()
 
     # Post-process body_xml: clean up LLM faithfulness violations + Kimi quirks.
     if isinstance(result.get("body_xml"), str):
@@ -572,8 +641,8 @@ def plan_topics(sections: list[dict], api_key: str,
 
     user_prompt = "Sections to organize:\n\n" + "\n\n".join(summaries)
 
-    # Check cache
-    key = _cache_key(user_prompt)
+    # Check cache (system-prompt-aware)
+    key = _cache_key(user_prompt, PLANNING_PROMPT)
     cached = _cache_get(key)
     if cached:
         return cached

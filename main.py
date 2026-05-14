@@ -202,6 +202,8 @@ def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
                 "title": title,
                 "topic_type": result["topic_type"],
                 "body_xml": result["body_xml"],
+                "shortdesc": result.get("shortdesc", ""),
+                "keywords": result.get("keywords", []),
                 "reasoning": result.get("reasoning", ""),
             }
         except Exception as e:
@@ -209,6 +211,8 @@ def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
                 "title": title,
                 "topic_type": t["type"],
                 "body_xml": _fallback_body(title, t["blocks"], t["type"]),
+                "shortdesc": "",
+                "keywords": [],
                 "reasoning": f"LLM failed: {e}; heuristic fallback",
             }
 
@@ -217,7 +221,7 @@ def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
     if api_key and len(valid_inputs) > 1:
         print(f"  Classifying {len(valid_inputs)} topics in parallel...")
         results = [None] * len(valid_inputs)
-        with ThreadPoolExecutor(max_workers=min(len(valid_inputs), 4)) as ex:
+        with ThreadPoolExecutor(max_workers=min(len(valid_inputs), 2)) as ex:
             for idx, res in ex.map(_classify_one, list(enumerate(valid_inputs))):
                 results[idx] = res
                 tag = "→" if "heuristic" not in res["reasoning"].lower() else "⚠"
@@ -237,6 +241,8 @@ def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
             "title": res["title"],
             "topic_type": res["topic_type"],
             "body_xml": res["body_xml"],
+            "shortdesc": res.get("shortdesc", ""),
+            "keywords": res.get("keywords", []),
         })
 
     # ── Step 6: Write output files ───────────────────────────────────────

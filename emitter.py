@@ -62,20 +62,43 @@ TOPIC_TEMPLATES = {
 }
 
 
-def wrap_dita_topic(title: str, body_xml: str, topic_type: str) -> str:
-    """Wrap body XML in a complete DITA topic document."""
+def wrap_dita_topic(title: str, body_xml: str, topic_type: str,
+                    shortdesc: str = "", keywords: list = None) -> str:
+    """Wrap body XML in a complete DITA topic document.
+
+    Emits, in spec-mandated order: <title>, <shortdesc> (3.2.1.6),
+    <prolog><metadata><keywords> (3.2.2.18), then the body.
+    """
     tmpl = TOPIC_TEMPLATES.get(topic_type, TOPIC_TEMPLATES["concept"])
     topic_id = _random_id()
 
-    # Build the complete document
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         tmpl["doctype"],
         tmpl["root_open"].format(id=topic_id),
         f'<title class="- topic/title ">{_xml_escape(title)}</title>',
-        body_xml,
-        tmpl["root_close"],
     ]
+
+    if shortdesc and shortdesc.strip():
+        lines.append(
+            f'<shortdesc class="- topic/shortdesc ">{_xml_escape(shortdesc.strip())}</shortdesc>'
+        )
+
+    keywords = [k for k in (keywords or []) if isinstance(k, str) and k.strip()]
+    if keywords:
+        kw_xml = "".join(
+            f'<keyword class="- topic/keyword ">{_xml_escape(k)}</keyword>'
+            for k in keywords
+        )
+        lines.append(
+            '<prolog class="- topic/prolog ">'
+            '<metadata class="- topic/metadata ">'
+            f'<keywords class="- topic/keywords ">{kw_xml}</keywords>'
+            '</metadata>'
+            '</prolog>'
+        )
+
+    lines.extend([body_xml, tmpl["root_close"]])
     return "\n".join(lines)
 
 
@@ -373,11 +396,32 @@ def _fix_content_model(body_xml: str) -> str:
     - <codeblock>/<p> directly in <step> → wrapped in <info>
     """
     body_xml = _fix_malformed_attrs(body_xml)
+    # Collapse duplicate close tags that LLMs emit on table cells, e.g.
+    # `<entry>foo</entry></entry>`. Cheap regex sweep before lxml sees it,
+    # so recovery mode doesn't reorganize rows in surprising ways.
+    body_xml = re.sub(r"</entry>\s*</entry>", "</entry>", body_xml)
+    body_xml = re.sub(r"</row>\s*</row>", "</row>", body_xml)
     body_xml = _fix_empty_tgroup(body_xml)
     try:
         root = etree.fromstring(f"<_root>{body_xml}</_root>".encode("utf-8"))
     except etree.XMLSyntaxError:
-        return body_xml  # can't parse, return as-is
+        # Last-resort: parse with libxml2 recovery (drops unbalanced tags).
+        # Better a slightly-truncated table than the entire topic failing.
+        try:
+            parser = etree.XMLParser(recover=True)
+            root = etree.fromstring(
+                f"<_root>{body_xml}</_root>".encode("utf-8"), parser=parser
+            )
+            if root is None:
+                return body_xml
+            # Re-serialize to get balanced XML back.
+            body_xml = "".join(
+                etree.tostring(c, encoding="unicode") for c in root
+            ) + (root.text or "")
+            # Re-parse the recovered form to continue with content-model fixes.
+            root = etree.fromstring(f"<_root>{body_xml}</_root>".encode("utf-8"))
+        except etree.XMLSyntaxError:
+            return body_xml  # genuinely unrecoverable
 
     modified = False
 
@@ -516,13 +560,16 @@ def write_output(output_dir: str, doc_title: str,
         title = section["title"]
         topic_type = section["topic_type"]
         body_xml = section["body_xml"]
+        shortdesc = section.get("shortdesc", "")
+        keywords = section.get("keywords", [])
         fname = topic_filename(title, topic_type)
 
         # Post-process: fix common DITA content model violations
         body_xml = _fix_content_model(body_xml)
 
         # Build full topic XML
-        full_xml = wrap_dita_topic(title, body_xml, topic_type)
+        full_xml = wrap_dita_topic(title, body_xml, topic_type,
+                                   shortdesc=shortdesc, keywords=keywords)
 
         # Validate well-formedness
         # Need to strip DOCTYPE for lxml parsing (no DTD available locally)
@@ -539,7 +586,8 @@ def write_output(output_dir: str, doc_title: str,
                     # the repaired XML before validating, so we don't waste retries
                     # on the same Kimi quirks that the original output had.
                     repaired = _fix_content_model(repaired)
-                    full_xml = wrap_dita_topic(title, repaired, topic_type)
+                    full_xml = wrap_dita_topic(title, repaired, topic_type,
+                                               shortdesc=shortdesc, keywords=keywords)
                     xml_check = re.sub(r"<!DOCTYPE[^>]+>", "", full_xml)
                     is_valid, error = validate_xml_wellformedness(xml_check)
                     if is_valid:
