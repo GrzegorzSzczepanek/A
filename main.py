@@ -221,7 +221,10 @@ def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
     if api_key and len(valid_inputs) > 1:
         print(f"  Classifying {len(valid_inputs)} topics in parallel...")
         results = [None] * len(valid_inputs)
-        with ThreadPoolExecutor(max_workers=min(len(valid_inputs), 2)) as ex:
+        # Paid-tier Gemini allows much more parallelism than the 2-worker
+        # free-tier cap. 8 workers saturates a typical multi-topic PDF without
+        # overwhelming the API.
+        with ThreadPoolExecutor(max_workers=min(len(valid_inputs), 8)) as ex:
             for idx, res in ex.map(_classify_one, list(enumerate(valid_inputs))):
                 results[idx] = res
                 tag = "→" if "heuristic" not in res["reasoning"].lower() else "⚠"

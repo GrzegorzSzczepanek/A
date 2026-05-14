@@ -276,10 +276,10 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
                     "keywords": [],
                 }
 
-        # Parallel classify (3-4x speedup on multi-topic PDFs)
+        # Parallel classify - paid-tier Gemini lets us go wide (8 workers).
         from concurrent.futures import ThreadPoolExecutor
         if api_key and len(topic_inputs) > 1:
-            with ThreadPoolExecutor(max_workers=min(len(topic_inputs), 4)) as ex:
+            with ThreadPoolExecutor(max_workers=min(len(topic_inputs), 8)) as ex:
                 classified = list(ex.map(_classify_one, topic_inputs))
         else:
             classified = [_classify_one(t) for t in topic_inputs]

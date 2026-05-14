@@ -26,17 +26,16 @@ from typing import Optional
 # ── HTTP with retry/backoff ──────────────────────────────────────────────────
 
 RETRY_STATUSES = {403, 408, 425, 429, 500, 502, 503, 504}
-MAX_RETRIES = 5
-BACKOFF_BASE = 2.0
-BACKOFF_CAP = 65.0
-# Minimum sleep when server says rate-limit (429). For free-tier Gemini Pro
-# the window is 5 RPM = one call per 12s. Waiting 15s gives the bucket time
-# to refill at least one slot.
-RATE_LIMIT_MIN_SLEEP = 15.0
-# Minimum gap between successive successful calls. Fast throttle: when Pro
-# hits 429 we transparently fall back to Flash for that single call, so we
-# can keep firing calls at near-full speed.
-MIN_INTER_CALL_GAP = 0.5
+MAX_RETRIES = 3
+BACKOFF_BASE = 1.5
+BACKOFF_CAP = 20.0
+# Sleep when the server returns 429. Paid-tier Gemini rarely rate-limits,
+# so a short cooldown is enough; the long free-tier wait is no longer needed.
+RATE_LIMIT_MIN_SLEEP = 5.0
+# Minimum gap between successive successful calls. With paid-tier Gemini the
+# RPM cap is effectively removed, so we want full parallelism. Tiny gap
+# (0.1s) avoids socket exhaustion on extreme bursts without serializing.
+MIN_INTER_CALL_GAP = 0.1
 _last_call_ts = 0.0
 import threading
 _call_lock = threading.Lock()
