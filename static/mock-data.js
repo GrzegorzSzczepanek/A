@@ -396,29 +396,48 @@ window.MockAPI = {
     const stages = STAGES.map(s => ({ ...s, status: 'queued', time: null }));
     onStageUpdate([...stages]);
 
-    // Optimistic spinner - backend does not stream, so we advance every ~1.8s.
+    // Backend does NOT stream stage updates - it sends them all at once
+    // when /convert returns. We do two things while waiting:
+    //   1. "ticker": every 200ms, recompute the active stage's elapsed
+    //      seconds from a wall-clock timestamp so the user sees a live
+    //      counter instead of "...".
+    //   2. "advance": every ~1.8s, optimistically mark the active stage
+    //      done (locking its time) and promote the next stage.
+    // When the response arrives, real backend timings replace whatever
+    // the optimistic clock guessed.
     let activeIdx = 0;
     stages[0].status = 'active';
+    stages[0].time = 0;
+    let activeStartedAt = Date.now();
     onStageUpdate(stages.map(s => ({ ...s })));
-    
-    // Initial log
+
     if (onLog) onLog({ stage: 'System', msg: `Starting pipeline for ${files.length} file(s)...`, time: '-' });
     if (onLog) onLog({ stage: stages[0].name, msg: `Initializing ${stages[0].name.toLowerCase()}...`, time: '-' });
 
+    const ticker = setInterval(() => {
+      const elapsed = (Date.now() - activeStartedAt) / 1000;
+      // Show one decimal so the counter visibly moves.
+      stages[activeIdx].time = elapsed.toFixed(1);
+      onStageUpdate(stages.map(s => ({ ...s })));
+    }, 200);
+
     const advance = setInterval(() => {
       if (activeIdx < stages.length - 1) {
+        // Lock the currently active stage's time at the wall-clock value
+        // it had just before we advance.
         stages[activeIdx].status = 'done';
-        stages[activeIdx].time = '...';
+        stages[activeIdx].time = ((Date.now() - activeStartedAt) / 1000).toFixed(1);
         activeIdx += 1;
         stages[activeIdx].status = 'active';
+        stages[activeIdx].time = 0;
+        activeStartedAt = Date.now();
         onStageUpdate(stages.map(s => ({ ...s })));
-        
-        // Add optimistic log entry
+
         if (onLog) {
-          onLog({ 
-            stage: stages[activeIdx].name, 
-            msg: `Running ${stages[activeIdx].name.toLowerCase()}...`, 
-            time: '-' 
+          onLog({
+            stage: stages[activeIdx].name,
+            msg: `Running ${stages[activeIdx].name.toLowerCase()}...`,
+            time: '-'
           });
         }
       }
@@ -438,11 +457,13 @@ window.MockAPI = {
       }
     } catch (e) {
       clearInterval(advance);
+      clearInterval(ticker);
       stages[activeIdx].status = 'error';
       onStageUpdate(stages.map(s => ({ ...s })));
       throw e;
     }
     clearInterval(advance);
+    clearInterval(ticker);
 
     if (data.error) {
       stages[activeIdx].status = 'error';
@@ -486,7 +507,9 @@ window.MockAPI = {
     }
     stages.forEach(s => {
       if (s.status !== 'error') s.status = 'done';
-      if (!s.time || s.time === '...') s.time = '-';
+      // null/undefined/'...' means we never measured this stage -> show "-".
+      // Numeric 0 is a valid (very fast) timing, keep it as-is.
+      if (s.time == null || s.time === '...') s.time = '-';
     });
     onStageUpdate(stages.map(s => ({ ...s })));
   },
