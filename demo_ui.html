@@ -46,7 +46,15 @@
   .scrollbar::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
   @keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
   .pulse-soft { animation: pulse-soft 1.4s ease-in-out infinite; }
-  .dragover { border-color: #3b82f6 !important; background: rgba(59,130,246,0.05); }
+  .dragover { border-color: #3b82f6 !important; background: rgba(59,130,246,0.08) !important; }
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  /* Stage row hover */
+  .stage-row:hover { background: rgba(255,255,255,0.02); }
 </style>
 </head>
 <body class="bg-bg text-text antialiased min-h-screen">
@@ -69,29 +77,71 @@
 
 <main class="max-w-screen-2xl mx-auto px-6 py-6 grid grid-cols-12 gap-6">
 
-  <aside class="col-span-12 lg:col-span-3 space-y-4">
-    <div>
-      <div id="dropzone" class="rounded-xl border-2 border-dashed border-border bg-card hover:border-accent transition p-6 text-center cursor-pointer">
-        <div class="text-3xl mb-2">📄</div>
-        <div class="text-sm font-medium mb-1">Drop one or more PDFs</div>
-        <div class="text-xs text-muted">or click to browse — multiple files run in parallel, results stack below</div>
-        <input id="fileInput" type="file" accept=".pdf" multiple class="hidden">
+  <aside class="col-span-12 lg:col-span-3 space-y-3">
+    <!-- Drop zone -->
+    <label id="dropzone" for="fileInput" class="block group relative rounded-2xl bg-gradient-to-br from-blue-500/[0.08] via-violet-500/[0.06] to-transparent border border-border hover:border-accent/60 transition-all p-5 cursor-pointer overflow-hidden">
+      <div class="absolute inset-0 bg-grid opacity-30 pointer-events-none" aria-hidden="true"></div>
+      <div class="relative">
+        <div class="flex items-center gap-2.5 mb-3">
+          <div class="w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center text-base">📄</div>
+          <div>
+            <div class="text-sm font-semibold leading-tight">Drop PDFs</div>
+            <div class="text-[11px] text-muted leading-tight">or click — multi-file = parallel</div>
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <kbd class="text-[10px] px-1.5 py-0.5 rounded bg-card border border-border text-muted">.pdf</kbd>
+          <kbd class="text-[10px] px-1.5 py-0.5 rounded bg-card border border-border text-muted">scans OK</kbd>
+          <kbd class="text-[10px] px-1.5 py-0.5 rounded bg-card border border-border text-muted">multi-lang</kbd>
+        </div>
       </div>
-      <button id="sampleBtn" class="w-full mt-2 text-xs px-3 py-2 rounded-md border border-border hover:bg-card transition flex items-center justify-center gap-2 text-muted hover:text-text">
-        ⚡ Run included sample
-      </button>
+      <input id="fileInput" type="file" accept=".pdf" multiple class="hidden">
+    </label>
+
+    <button id="sampleBtn" class="w-full text-xs px-3 py-2.5 rounded-xl bg-card border border-border hover:border-accent/40 hover:bg-surface transition flex items-center justify-center gap-2 group">
+      <span class="text-accent">⚡</span>
+      <span class="text-text">Run included sample</span>
+      <span class="text-muted ml-auto text-[10px] group-hover:text-text transition">→</span>
+    </button>
+
+    <!-- Stat strip -->
+    <div class="bg-card border border-border rounded-xl p-3 grid grid-cols-3 gap-2 text-center">
+      <div>
+        <div class="text-base font-semibold text-ok" id="stat-ok">0</div>
+        <div class="text-[9px] uppercase tracking-wider text-muted">passed</div>
+      </div>
+      <div class="border-x border-border">
+        <div class="text-base font-semibold" id="stat-total">0</div>
+        <div class="text-[9px] uppercase tracking-wider text-muted">total</div>
+      </div>
+      <div>
+        <div class="text-base font-semibold text-accent" id="stat-time">0s</div>
+        <div class="text-[9px] uppercase tracking-wider text-muted">avg time</div>
+      </div>
     </div>
 
+    <!-- History -->
+    <div class="bg-card border border-border rounded-xl overflow-hidden">
+      <div class="px-4 py-2.5 border-b border-border flex items-center justify-between">
+        <div class="text-[10px] uppercase tracking-wider text-muted font-medium">History</div>
+        <button id="histClear" class="text-[10px] text-muted hover:text-text transition">clear</button>
+      </div>
+      <div id="history" class="p-2 space-y-0.5 text-xs max-h-64 overflow-y-auto scrollbar">
+        <div class="text-muted italic px-2 py-1.5 text-[11px]">No conversions yet</div>
+      </div>
+    </div>
+
+    <!-- Pipeline diagram -->
     <div class="bg-card border border-border rounded-xl p-4">
-      <div class="text-[11px] uppercase tracking-wider text-muted mb-2">History</div>
-      <div id="history" class="space-y-1 text-xs">
-        <div class="text-muted italic">No conversions yet</div>
+      <div class="text-[10px] uppercase tracking-wider text-muted font-medium mb-3">Pipeline</div>
+      <div class="space-y-2 text-[11px]">
+        <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span><span class="text-text">Parser</span><span class="text-muted ml-auto font-mono">pdfplumber</span></div>
+        <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-violet-500"></span><span class="text-text">Sections</span><span class="text-muted ml-auto font-mono">rules</span></div>
+        <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-pink-500"></span><span class="text-text">Topic plan</span><span class="text-muted ml-auto font-mono">LLM</span></div>
+        <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-pink-500"></span><span class="text-text">Classifier</span><span class="text-muted ml-auto font-mono">LLM ×N</span></div>
+        <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span><span class="text-text">Emitter</span><span class="text-muted ml-auto font-mono">lxml</span></div>
+        <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span class="text-text">DITA-OT HTML5</span><span class="text-muted ml-auto font-mono">strict</span></div>
       </div>
-    </div>
-
-    <div class="bg-card border border-border rounded-xl p-4 text-xs">
-      <div class="text-[11px] uppercase tracking-wider text-muted mb-2">Pipeline</div>
-      <div class="text-muted leading-relaxed">Parser → Sections → Topic plan → Classifier → Emitter → XML check → DITA-OT HTML5</div>
     </div>
   </aside>
 
@@ -211,16 +261,40 @@ const TYPE_PILL = {
 const history = JSON.parse(localStorage.getItem('p2d_history') || '[]');
 function renderHistory() {
   const box = $('#history');
-  if (!history.length) { box.innerHTML = '<div class="text-muted italic">No conversions yet</div>'; return; }
-  box.innerHTML = history.slice(-10).reverse().map(h => `
-    <div class="flex items-center justify-between gap-2 py-1 px-2 rounded hover:bg-surface">
-      <span class="truncate flex-1">${escape(h.name)}</span>
-      <span class="text-muted text-[10px]">${h.topics}t · ${h.time}s</span>
-      <span class="text-${h.passed ? 'ok' : 'warn'}">${h.passed ? '✓' : '!'}</span>
-    </div>
-  `).join('');
+  if (!history.length) {
+    box.innerHTML = '<div class="text-muted italic px-2 py-1.5 text-[11px]">No conversions yet</div>';
+  } else {
+    box.innerHTML = history.slice(-10).reverse().map(h => `
+      <div class="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface text-[11px] group">
+        <span class="text-${h.passed ? 'ok' : 'warn'} text-[9px]">●</span>
+        <span class="truncate flex-1 text-text">${escape(h.name)}</span>
+        <span class="text-muted font-mono tabular-nums">${h.topics}t · ${h.time}s</span>
+      </div>
+    `).join('');
+  }
+  // Update stat strip
+  const ok = history.filter(h => h.passed).length;
+  const avg = history.length ? (history.reduce((a, h) => a + h.time, 0) / history.length).toFixed(1) : 0;
+  $('#stat-ok').textContent = ok;
+  $('#stat-total').textContent = history.length;
+  $('#stat-time').textContent = `${avg}s`;
 }
 renderHistory();
+
+$('#histClear').addEventListener('click', () => {
+  history.length = 0;
+  localStorage.removeItem('p2d_history');
+  renderHistory();
+});
+
+// Drop anywhere on page, not just the small zone
+['dragenter','dragover','dragleave','drop'].forEach(e =>
+  document.body.addEventListener(e, ev => { ev.preventDefault(); }, false)
+);
+document.body.addEventListener('drop', ev => {
+  const files = [...(ev.dataTransfer?.files || [])];
+  if (files.length) handleFiles(files);
+});
 
 const dz = $('#dropzone'), fi = $('#fileInput');
 dz.addEventListener('click', () => fi.click());
@@ -300,14 +374,27 @@ function renderResult(card, name, j) {
   }
 
   const stagesBox = card.querySelector('[data-slot="stages"]');
-  stagesBox.innerHTML = (j.stages || []).map(s => `
-    <div class="flex items-center gap-3 py-1 text-xs">
-      <div class="w-4">${STAGE_ICONS[s.status] || STAGE_ICONS.done}</div>
-      <div class="w-32 text-text">${escape(s.name)}</div>
+  const totalT = (j.stages || []).reduce((a, s) => a + (s.time || 0), 0);
+  stagesBox.innerHTML = (j.stages || []).map(s => {
+    const t = s.time ?? 0;
+    const pct = totalT > 0 ? Math.min(100, Math.round(100 * t / totalT)) : 0;
+    return `
+    <div class="stage-row flex items-center gap-3 py-1.5 px-1 rounded text-xs transition">
+      <div class="w-4 text-center">${STAGE_ICONS[s.status] || STAGE_ICONS.done}</div>
+      <div class="w-32 font-medium text-text">${escape(s.name)}</div>
       <div class="text-muted flex-1 truncate" title="${escape(s.detail || '')}">${escape(s.detail || '')}</div>
-      <div class="text-muted font-mono">${(s.time ?? 0).toFixed(2)}s</div>
-    </div>
-  `).join('');
+      <div class="flex items-center gap-2 shrink-0">
+        <div class="w-16 h-1 rounded-full bg-surface overflow-hidden">
+          <div class="h-full bg-accent/60" style="width:${pct}%"></div>
+        </div>
+        <div class="font-mono text-text tabular-nums w-12 text-right">${t.toFixed(2)}s</div>
+      </div>
+    </div>`;
+  }).join('') + `
+    <div class="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-border text-[11px] text-muted">
+      <span>total</span>
+      <span class="font-mono text-text tabular-nums">${totalT.toFixed(2)}s</span>
+    </div>`;
 
   const m = j.metrics;
   const metricsBox = card.querySelector('[data-slot="metrics"]');

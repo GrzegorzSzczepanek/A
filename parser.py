@@ -291,12 +291,170 @@ def _optimize_extracted(page_map: dict[int, list[str]]) -> None:
         page_map[page_num] = new_paths
 
 
+def _is_scanned_pdf(pdf) -> bool:
+    """A PDF is "scanned" when its pages have no extractable text — each page
+    is a raster image. We sample the first 3 pages: if total text length is
+    below 80 characters, treat the document as a scan."""
+    sample_chars = 0
+    for page in pdf.pages[:3]:
+        try:
+            t = page.extract_text() or ""
+        except Exception:
+            t = ""
+        sample_chars += len(t.strip())
+        if sample_chars >= 80:
+            return False
+    return True
+
+
+def _ocr_pdf_with_gemini(pdf_path: str) -> list[Block]:
+    """Use Gemini's multimodal vision to extract text from a scanned PDF.
+
+    Gemini 2.5+ accepts PDFs natively via `inlineData` (mime:application/pdf)
+    and produces structured Markdown — far stronger than Tesseract for noisy
+    scans, mixed languages (including Polish), and complex layouts. We then
+    convert the Markdown back into our Block stream so downstream stages run
+    unchanged. Falls back to an empty list if no GEMINI_API_KEY.
+    """
+    import base64, json as _json, os as _os
+    from llm_providers import _post_json, _stream_post_sse  # reuse retry/throttle
+    api_key = _os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return []
+
+    try:
+        pdf_bytes = Path(pdf_path).read_bytes()
+    except Exception:
+        return []
+
+    system = (
+        "You are an OCR + structural-extraction agent. Read this PDF (which is "
+        "a scan / image-based document) and emit MARKDOWN that preserves the "
+        "structure: # for top-level headings, ## for subsections, - for bullet "
+        "lists, 1. for numbered lists, ``` for code blocks, tables in GitHub "
+        "Markdown. Preserve Polish, Czech, German diacritics exactly. Do NOT "
+        "summarise or paraphrase — transcribe verbatim. Do NOT translate."
+    )
+    body = {
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [
+            {"text": "Transcribe this scanned PDF into structured Markdown."},
+            {"inlineData": {"mimeType": "application/pdf",
+                            "data": base64.b64encode(pdf_bytes).decode()}},
+        ]}],
+        "generationConfig": {
+            "maxOutputTokens": 16384,
+            "temperature": 0.0,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-3.1-flash-lite:streamGenerateContent?alt=sse&key=" + api_key
+    )
+    chunks: list[str] = []
+    def _consume(line: str) -> None:
+        if not line.startswith("data:"):
+            return
+        try:
+            evt = _json.loads(line[5:].strip())
+        except _json.JSONDecodeError:
+            return
+        for cand in evt.get("candidates", []) or []:
+            for part in cand.get("content", {}).get("parts", []) or []:
+                if part.get("text"):
+                    chunks.append(part["text"])
+    try:
+        _stream_post_sse(url, _json.dumps(body).encode(),
+                         {"Content-Type": "application/json"},
+                         on_line=_consume, timeout=300)
+    except Exception:
+        return []
+
+    md = "".join(chunks).strip()
+    if not md:
+        return []
+    return _markdown_to_blocks(md)
+
+
+def _markdown_to_blocks(md: str) -> list[Block]:
+    """Light Markdown → Block converter for OCR'd content. Detects headings,
+    bullets, numbered lists, fenced code, and Markdown tables (which we keep
+    as-is in a `table` block — downstream LLM converts to CALS)."""
+    blocks: list[Block] = []
+    lines = md.splitlines()
+    i, page = 0, 1
+    in_code = False
+    code_buf: list[str] = []
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith("```"):
+            if in_code:
+                blocks.append(Block(type="code", text="\n".join(code_buf), page=page, level=0))
+                code_buf = []
+                in_code = False
+            else:
+                in_code = True
+            i += 1
+            continue
+        if in_code:
+            code_buf.append(line)
+            i += 1
+            continue
+        s = line.strip()
+        if not s:
+            i += 1
+            continue
+        m = re.match(r"^(#{1,6})\s+(.+)$", s)
+        if m:
+            level = len(m.group(1))
+            blocks.append(Block(type="heading", text=m.group(2), page=page, level=level))
+            i += 1
+            continue
+        m = re.match(r"^(?:-|\*|\+)\s+(.+)$", s)
+        if m:
+            blocks.append(Block(type="list_item", text=m.group(1), page=page, level=0))
+            i += 1
+            continue
+        m = re.match(r"^\d+\.\s+(.+)$", s)
+        if m:
+            blocks.append(Block(type="list_item", text=m.group(1), page=page, level=0))
+            i += 1
+            continue
+        if s.startswith("|") and "|" in s[1:]:
+            # Collect contiguous markdown table lines
+            tbl = [s]
+            j = i + 1
+            while j < len(lines) and lines[j].strip().startswith("|"):
+                tbl.append(lines[j].strip())
+                j += 1
+            blocks.append(Block(type="table", text="\n".join(tbl), page=page, level=0))
+            i = j
+            continue
+        # Plain paragraph: merge with subsequent non-blank, non-special lines
+        para = [s]
+        j = i + 1
+        while j < len(lines):
+            nxt = lines[j].strip()
+            if not nxt or nxt.startswith(("#", "-", "*", "+", "|", "```")) or re.match(r"^\d+\.\s", nxt):
+                break
+            para.append(nxt)
+            j += 1
+        blocks.append(Block(type="paragraph", text=" ".join(para), page=page, level=0))
+        i = j
+    return blocks
+
+
 def parse_pdf(pdf_path: str, image_output_dir: str = None) -> list[Block]:
     """
     Parse a PDF into a list of structured Blocks.
 
     Returns blocks in document order with types:
     heading, paragraph, list_item, code, table, note, image
+
+    Scanned PDFs (no extractable text) are routed to Gemini's multimodal
+    vision for transcription — far better than Tesseract for noisy scans
+    and mixed-language documents (Polish/Czech diacritics included).
     """
     blocks: list[Block] = []
     pdf_path = str(pdf_path)
@@ -304,6 +462,17 @@ def parse_pdf(pdf_path: str, image_output_dir: str = None) -> list[Block]:
     # Extract images first
     img_dir = image_output_dir or str(Path(pdf_path).parent / "images")
     page_images = extract_images(pdf_path, img_dir)
+
+    # Quick scan/text detection
+    with pdfplumber.open(pdf_path) as _probe:
+        if _is_scanned_pdf(_probe):
+            print("  ⚠ Scanned PDF detected (no extractable text) — routing to Gemini Vision...")
+            ocr_blocks = _ocr_pdf_with_gemini(pdf_path)
+            if ocr_blocks:
+                print(f"    Gemini Vision returned {len(ocr_blocks)} blocks")
+                return ocr_blocks
+            print("    Gemini Vision OCR failed (no GEMINI_API_KEY or empty response).")
+            return []
 
     with pdfplumber.open(pdf_path) as pdf:
         heading_sizes = _detect_heading_sizes(pdf.pages)

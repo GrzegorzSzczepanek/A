@@ -762,6 +762,42 @@ def write_output(output_dir: str, doc_title: str,
         })
         print(f"  ✓ {fname} ({topic_type})")
 
+    # ── Post-process: rewrite stale xref hrefs to the actual emitted filenames.
+    # The classifier can change topic_type between planning and final emit
+    # (e.g. planner says "reference", classifier downgrades to "concept"),
+    # which flips the file prefix r_→c_. Other topics may already have baked
+    # in the planned filename in <xref href=>, leaving DITA-OT with a broken
+    # link (DOTX008E). Build {basename → actual filename} and rewrite.
+    actual_files = {t["filename"] for t in topic_list}
+    # Map filename-stripped-of-prefix to actual filename, e.g.
+    # "run_income_accruals_panel_options.dita" → "c_run_income_accruals_panel_options.dita"
+    base_to_actual = {}
+    for fn in actual_files:
+        # Strip leading c_ / t_ / r_ to get the bare slug
+        bare = re.sub(r"^[ctr]_", "", fn)
+        base_to_actual[bare] = fn
+
+    xref_re = re.compile(r'(<xref[^>]*href=")([^"]+\.dita)"')
+    rewrites = 0
+    for t in topic_list:
+        fp = out / t["filename"]
+        text = fp.read_text(encoding="utf-8")
+        def fix(m):
+            nonlocal rewrites
+            href = m.group(2)
+            if href in actual_files or "/" in href or href.startswith("http"):
+                return m.group(0)
+            bare = re.sub(r"^[ctr]_", "", href)
+            if bare in base_to_actual and base_to_actual[bare] != href:
+                rewrites += 1
+                return f'{m.group(1)}{base_to_actual[bare]}"'
+            return m.group(0)
+        new_text = xref_re.sub(fix, text)
+        if new_text != text:
+            fp.write_text(new_text, encoding="utf-8")
+    if rewrites:
+        print(f"  ✓ Rewrote {rewrites} stale xref(s) to current filenames")
+
     # Generate and write ditamap
     map_fname = ditamap_filename(doc_title)
     map_xml = generate_ditamap(doc_title, topic_list, product_name)
