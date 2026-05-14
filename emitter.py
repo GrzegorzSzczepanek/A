@@ -25,6 +25,7 @@ def _slugify(title: str) -> str:
     s = title.lower().strip()
     s = re.sub(r"[^a-z0-9\s_-]", "", s)
     s = re.sub(r"[\s-]+", "_", s)
+    s = re.sub(r"_+", "_", s)  # collapse multiple underscores
     s = s.strip("_")
     return s[:60]
 

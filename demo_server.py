@@ -285,13 +285,14 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
             provider=provider,
         )
 
-        # Copy images
+        # Copy images (ensure both PNG and JPG are moved to session dir)
         img_path = Path(img_dir)
         if img_path.exists():
-            for img in img_path.glob("*.png"):
-                dest = out_dir / img.name
-                if not dest.exists():
-                    shutil.copy2(img, dest)
+            for ext in ("*.png", "*.jpg", "*.jpeg"):
+                for img in img_path.glob(ext):
+                    dest = out_dir / img.name
+                    if not dest.exists():
+                        shutil.copy2(img, dest)
 
         stages.append({
             "name": "File emission",
