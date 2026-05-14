@@ -1,0 +1,69 @@
+name: CI — DITA-OT validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install DITA-OT 4.3.1
+        run: |
+          curl -sL -o dita-ot.zip https://github.com/dita-ot/dita-ot/releases/download/4.3.1/dita-ot-4.3.1.zip
+          unzip -q dita-ot.zip -d "$HOME"
+          echo "$HOME/dita-ot-4.3.1/bin" >> "$GITHUB_PATH"
+
+      - name: Run pipeline (heuristic-only, no API key needed)
+        env:
+          # No GEMINI_API_KEY in CI on purpose — proves the pipeline degrades
+          # gracefully to deterministic heuristics + still passes DITA-OT.
+          GEMINI_API_KEY: ""
+        run: |
+          python main.py test_data/synthetic_alert_system.pdf -o output/ci/
+
+      - name: Assert generated artifacts
+        run: |
+          test -f output/ci/m_synthetic_alert_system.ditamap
+          ls output/ci/*.dita
+          echo "Topic count: $(ls output/ci/*.dita | wc -l)"
+
+      - name: DITA-OT HTML5 build (--processing-mode=strict)
+        run: |
+          MAP=$(ls "$PWD/output/ci"/m_*.ditamap | head -1)
+          dita -i "$MAP" -f html5 -o "$PWD/html5" --processing-mode=strict
+          test -f html5/index.html
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dita-output-${{ github.sha }}
+          path: |
+            output/ci/
+            html5/
+          retention-days: 14

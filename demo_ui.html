@@ -1,340 +1,410 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PDF-to-DITA Converter</title>
+<title>PDF → DITA · BNY Hackathon</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          bg:      '#09090b',
+          surface: '#0f0f12',
+          card:    '#141418',
+          border:  '#27272a',
+          muted:   '#71717a',
+          text:    '#fafafa',
+          accent:  '#3b82f6',
+          ok:      '#22c55e',
+          warn:    '#eab308',
+          fail:    '#ef4444',
+          concept: '#a78bfa',
+          task:    '#22d3ee',
+          reference:'#f97316',
+        },
+      },
+    },
+  };
+</script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  :root {
-    --bg: #0a0e17; --surface: #111827; --surface2: #1a2332;
-    --border: #2a3444; --text: #e2e8f0; --muted: #8899aa;
-    --accent: #3b82f6; --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
-    --concept: #8b5cf6; --task: #06b6d4; --reference: #f97316;
-  }
-  body { font-family: 'IBM Plex Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
-  h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.25rem; }
-  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
-  .subtitle span { color: var(--accent); }
-
-  /* Upload zone */
-  .upload-zone {
-    border: 2px dashed var(--border); border-radius: 12px; padding: 3rem;
-    text-align: center; cursor: pointer; transition: all 0.2s;
-    background: var(--surface);
-  }
-  .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: var(--surface2); }
-  .upload-zone h3 { margin-bottom: 0.5rem; }
-  .upload-zone p { color: var(--muted); font-size: 0.85rem; }
-  .upload-zone input { display: none; }
-
-  /* Progress */
-  .pipeline { margin: 2rem 0; }
-  .stage { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
-    border-left: 3px solid var(--border); margin-left: 8px; font-size: 0.9rem; }
-  .stage.done { border-color: var(--green); }
-  .stage.active { border-color: var(--accent); }
-  .stage.error { border-color: var(--red); }
-  .stage-icon { width: 20px; text-align: center; flex-shrink: 0; }
-  .stage-name { font-weight: 500; min-width: 140px; }
-  .stage-detail { color: var(--muted); font-size: 0.8rem; flex: 1; }
-  .stage-time { color: var(--muted); font-size: 0.75rem; font-family: 'IBM Plex Mono', monospace; }
-
-  /* Metrics row */
-  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 1.5rem 0; }
-  .metric-card { background: var(--surface); border-radius: 8px; padding: 1rem; border: 1px solid var(--border); }
-  .metric-card .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  .metric-card .value { font-size: 1.4rem; font-weight: 600; margin-top: 4px; }
-  .metric-card .value.ok { color: var(--green); }
-
-  /* File tabs */
-  .file-tabs { display: flex; gap: 2px; margin-top: 2rem; flex-wrap: wrap; }
-  .file-tab {
-    padding: 8px 16px; font-size: 0.8rem; border: none; cursor: pointer;
-    border-radius: 8px 8px 0 0; font-family: 'IBM Plex Mono', monospace;
-    background: var(--surface); color: var(--muted); transition: all 0.15s;
-  }
-  .file-tab:hover { color: var(--text); }
-  .file-tab.active { background: var(--surface2); color: var(--text); }
-  .file-tab .type-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-  .file-tab .type-dot.concept { background: var(--concept); }
-  .file-tab .type-dot.task { background: var(--task); }
-  .file-tab .type-dot.reference { background: var(--reference); }
-  .file-tab .type-dot.ditamap { background: var(--amber); }
-
-  /* Code viewer */
-  .code-viewer {
-    background: var(--surface2); border: 1px solid var(--border); border-radius: 0 8px 8px 8px;
-    padding: 1.25rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem;
-    line-height: 1.7; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
-    max-height: 500px; overflow-y: auto;
-  }
-  .xml-tag { color: #7dd3fc; }
-  .xml-attr { color: #c4b5fd; }
-  .xml-val { color: #86efac; }
-  .xml-text { color: var(--text); }
-  .xml-doctype { color: var(--muted); }
-
-  /* Plan visualization */
-  .topic-plan { display: flex; gap: 12px; margin: 1.5rem 0; flex-wrap: wrap; }
-  .topic-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px 16px; flex: 1; min-width: 200px;
-  }
-  .topic-card h4 { font-size: 0.85rem; margin-bottom: 6px; }
-  .topic-card .type-badge {
-    display: inline-block; font-size: 0.65rem; padding: 2px 8px;
-    border-radius: 4px; font-weight: 500; text-transform: uppercase;
-  }
-  .type-badge.concept { background: rgba(139,92,246,0.15); color: var(--concept); }
-  .type-badge.task { background: rgba(6,182,212,0.15); color: var(--task); }
-  .type-badge.reference { background: rgba(249,115,22,0.15); color: var(--reference); }
-  .topic-card .sections { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
-
-  .hidden { display: none; }
-  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
-    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .error-msg { color: var(--red); background: rgba(239,68,68,0.1); padding: 1rem; border-radius: 8px; margin: 1rem 0; font-size: 0.85rem; }
-
-  /* Download links */
-  .dl-link {
-    padding: 6px 12px; font-size: 0.78rem; font-family: 'IBM Plex Mono', monospace;
-    background: var(--surface); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; text-decoration: none; transition: all 0.15s;
-  }
-  .dl-link:hover { background: var(--surface2); border-color: var(--accent); color: var(--accent); }
-  .dl-link.dl-zip { background: var(--accent); color: white; border-color: var(--accent); font-weight: 500; }
-  .dl-link.dl-zip:hover { background: #2563eb; color: white; }
-
-  /* Result cards (one per upload) */
-  #resultsContainer { display: flex; flex-direction: column; gap: 1.5rem; margin-top: 2rem; }
-  .result-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
-  }
-  .card-header {
-    display: flex; align-items: center; gap: 12px; padding: 14px 18px;
-    background: var(--surface2); border-bottom: 1px solid var(--border);
-  }
-  .card-filename {
-    flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 0.9rem;
-    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .card-elapsed {
-    font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem;
-    color: var(--muted); padding: 2px 8px; background: var(--surface);
-    border-radius: 4px; min-width: 70px; text-align: right;
-  }
-  .card-close {
-    background: transparent; border: none; color: var(--muted);
-    font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 0 6px;
-    transition: color 0.15s;
-  }
-  .card-close:hover { color: var(--red); }
-  .card-body { padding: 14px 18px; }
-  .card-body #downloadBar, .card-body [id$="-downloads"] {
-    display: flex; flex-wrap: wrap; gap: 8px; margin: 1rem 0; align-items: center;
-  }
-  .card-error {
-    color: var(--red); background: rgba(239,68,68,0.1);
-    padding: 1rem; border-radius: 8px; margin: 1rem 0; font-size: 0.85rem;
-  }
+  body { font-family: 'Inter', sans-serif; }
+  pre, code { font-family: 'JetBrains Mono', monospace; }
+  .scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+  .scrollbar::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+  @keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .pulse-soft { animation: pulse-soft 1.4s ease-in-out infinite; }
+  .dragover { border-color: #3b82f6 !important; background: rgba(59,130,246,0.05); }
 </style>
 </head>
-<body>
-<div class="container">
-  <h1>PDF-to-DITA Converter</h1>
-  <p class="subtitle">BNY AI in Finance Hackathon <span>|</span> Automated documentation conversion tool</p>
+<body class="bg-bg text-text antialiased min-h-screen">
 
-  <div class="upload-zone" id="dropzone">
-    <h3>Drop one or more PDFs here</h3>
-    <p>or click to browse &mdash; multiple files run in parallel, results stack below</p>
-    <input type="file" id="fileInput" accept=".pdf" multiple>
+<header class="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-20">
+  <div class="max-w-screen-2xl mx-auto px-6 h-14 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-7 h-7 rounded-md bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center text-xs font-bold">D</div>
+      <div>
+        <div class="font-semibold text-sm leading-tight">PDF → DITA Converter</div>
+        <div class="text-[11px] text-muted leading-tight">BNY AI in Finance Hackathon · May 14, 2026</div>
+      </div>
+    </div>
+    <nav class="flex items-center gap-1 text-sm">
+      <button data-tab="about"  class="tab-btn px-3 py-1.5 rounded-md hover:bg-card transition">About</button>
+      <a href="https://github.com/GrzegorzSzczepanek/AI-Finance" target="_blank" class="ml-2 px-3 py-1.5 rounded-md border border-border hover:bg-card transition text-xs">GitHub ↗</a>
+    </nav>
   </div>
+</header>
 
-  <div id="resultsContainer"></div>
+<main class="max-w-screen-2xl mx-auto px-6 py-6 grid grid-cols-12 gap-6">
+
+  <aside class="col-span-12 lg:col-span-3 space-y-4">
+    <div>
+      <div id="dropzone" class="rounded-xl border-2 border-dashed border-border bg-card hover:border-accent transition p-6 text-center cursor-pointer">
+        <div class="text-3xl mb-2">📄</div>
+        <div class="text-sm font-medium mb-1">Drop one or more PDFs</div>
+        <div class="text-xs text-muted">or click to browse — multiple files run in parallel, results stack below</div>
+        <input id="fileInput" type="file" accept=".pdf" multiple class="hidden">
+      </div>
+      <button id="sampleBtn" class="w-full mt-2 text-xs px-3 py-2 rounded-md border border-border hover:bg-card transition flex items-center justify-center gap-2 text-muted hover:text-text">
+        ⚡ Run included sample
+      </button>
+    </div>
+
+    <div class="bg-card border border-border rounded-xl p-4">
+      <div class="text-[11px] uppercase tracking-wider text-muted mb-2">History</div>
+      <div id="history" class="space-y-1 text-xs">
+        <div class="text-muted italic">No conversions yet</div>
+      </div>
+    </div>
+
+    <div class="bg-card border border-border rounded-xl p-4 text-xs">
+      <div class="text-[11px] uppercase tracking-wider text-muted mb-2">Pipeline</div>
+      <div class="text-muted leading-relaxed">Parser → Sections → Topic plan → Classifier → Emitter → XML check → DITA-OT HTML5</div>
+    </div>
+  </aside>
+
+  <section class="col-span-12 lg:col-span-9">
+    <div id="empty" class="bg-card border border-border rounded-xl p-12 text-center">
+      <div class="text-5xl mb-4">⌘</div>
+      <h2 class="text-lg font-semibold mb-1">Ready when you are.</h2>
+      <p class="text-sm text-muted max-w-md mx-auto">Drop a PDF on the left, or click <em>Run included sample</em> to see the full pipeline on the hackathon's example file. All processing happens locally — uploads are deleted right after parsing.</p>
+    </div>
+    <div id="results" class="space-y-6 hidden"></div>
+  </section>
+</main>
+
+<template id="cardTpl">
+  <article class="bg-card border border-border rounded-xl overflow-hidden">
+    <header class="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-sm font-semibold truncate" data-slot="filename"></span>
+          <span data-slot="badge" class="px-2 py-0.5 text-[10px] rounded-md font-medium"></span>
+        </div>
+        <div class="text-[11px] text-muted mt-0.5" data-slot="subtitle"></div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <a data-slot="zipBtn" class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-surface transition hidden">↓ ZIP</a>
+        <button data-slot="closeBtn" class="text-muted hover:text-text px-2" title="Close">✕</button>
+      </div>
+    </header>
+
+    <div class="px-5 py-3 border-b border-border" data-slot="stages"></div>
+
+    <div class="px-5 py-4 border-b border-border grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3" data-slot="metrics"></div>
+
+    <div class="px-5 py-4 border-b border-border grid md:grid-cols-2 gap-6">
+      <div>
+        <div class="text-[11px] uppercase tracking-wider text-muted mb-2">Requirements coverage (a–k)</div>
+        <ul data-slot="features" class="space-y-1 text-xs"></ul>
+      </div>
+      <div>
+        <div class="text-[11px] uppercase tracking-wider text-muted mb-2">Semantic richness</div>
+        <div data-slot="semantic" class="flex flex-wrap gap-1.5"></div>
+        <div class="text-[11px] uppercase tracking-wider text-muted mt-4 mb-2">Topic plan</div>
+        <ul data-slot="plan" class="space-y-1 text-xs"></ul>
+      </div>
+    </div>
+
+    <div class="px-5 pt-3 flex items-center gap-2 border-b border-border">
+      <div data-slot="fileTabs" class="flex items-center gap-1 overflow-x-auto scrollbar flex-1"></div>
+      <button data-slot="htmlTab" class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-surface transition hidden">🌐 HTML5 preview</button>
+    </div>
+
+    <div data-slot="ditaPane" class="hidden">
+      <pre class="overflow-x-auto scrollbar text-xs leading-relaxed p-5 max-h-[500px]"><code data-slot="ditaCode" class="language-xml"></code></pre>
+    </div>
+
+    <div data-slot="htmlPane" class="hidden">
+      <iframe data-slot="htmlFrame" class="w-full h-[600px] border-0 bg-white"></iframe>
+    </div>
+  </article>
+</template>
+
+<div id="aboutModal" class="hidden fixed inset-0 bg-black/60 z-30 backdrop-blur-sm flex items-start justify-center pt-20 px-6">
+  <div class="bg-card border border-border rounded-xl max-w-2xl w-full overflow-hidden">
+    <header class="px-6 py-4 border-b border-border flex items-center justify-between">
+      <h2 class="font-semibold">About this tool</h2>
+      <button id="aboutClose" class="text-muted hover:text-text" title="Close">✕</button>
+    </header>
+    <div class="px-6 py-5 text-sm space-y-3 max-h-[60vh] overflow-y-auto scrollbar">
+      <p>Hybrid pipeline that converts technical PDFs into DITA 1.3 XML. Deterministic parsing + XML serialization, with two LLM stages for topic planning and classification.</p>
+      <p>Validates output with DITA-OT 4.3.1 targeting HTML5 with <code class="text-xs bg-surface px-1 rounded">--processing-mode=strict</code>.</p>
+      <p class="text-muted text-xs">Default model: <code class="bg-surface px-1 rounded">gemini-3.1-flash-lite</code> · streaming SSE · context cache · thinking off</p>
+      <div class="border-t border-border pt-3 mt-3 text-xs text-muted">
+        Per-PDF average wall-clock: <span class="text-text">~25–30 s</span> · cost: <span class="text-text">~$0.005–0.015</span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
-const dropzone = document.getElementById('dropzone');
-const fileInput = document.getElementById('fileInput');
-const resultsContainer = document.getElementById('resultsContainer');
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
 
-dropzone.addEventListener('click', () => fileInput.click());
-dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
-dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-dropzone.addEventListener('drop', e => {
-  e.preventDefault(); dropzone.classList.remove('dragover');
-  for (const f of e.dataTransfer.files) handleFile(f);
-});
-fileInput.addEventListener('change', e => {
-  for (const f of e.target.files) handleFile(f);
-  e.target.value = '';  // allow re-uploading the same file
-});
+const FEATURE_LABELS = {
+  a: 'Topic-type detection',
+  b: 'Document map',
+  c: 'CALS tables',
+  d: 'Best practices (no Latin abbrev, no via)',
+  e: '<shortdesc>',
+  f: 'Product-name variable',
+  g: '<keywords>',
+  h: 'Hyperlinks',
+  i: 'Image cap (≤1000 px / ≤200 KB)',
+  j: 'Alt text',
+  k: 'Batch processing',
+};
 
-let cardCounter = 0;
+const STAGE_ICONS = {
+  done: '<span class="text-ok">✓</span>',
+  error: '<span class="text-fail">✗</span>',
+  skipped: '<span class="text-warn">!</span>',
+  pending: '<span class="text-muted">○</span>',
+  active: '<span class="text-accent pulse-soft">●</span>',
+};
 
-function makeCard(file) {
-  const idx = ++cardCounter;
-  const card = document.createElement('div');
-  card.className = 'result-card';
-  card.id = 'card-' + idx;
-  card.innerHTML =
-    '<div class="card-header">' +
-      '<span class="card-filename">' + escapeHtml(file.name) + '</span>' +
-      '<span class="card-elapsed" id="card-' + idx + '-elapsed">0s</span>' +
-      '<button class="card-close" onclick="document.getElementById(\'card-' + idx + '\').remove()">×</button>' +
-    '</div>' +
-    '<div class="card-body">' +
-      '<div class="pipeline" id="card-' + idx + '-stages"></div>' +
-      '<div class="metrics" id="card-' + idx + '-metrics"></div>' +
-      '<div id="card-' + idx + '-plan" class="hidden">' +
-        '<h3 style="font-size:0.9rem;color:var(--muted);margin:8px 0">Topic plan</h3>' +
-        '<div class="topic-plan" id="card-' + idx + '-planList"></div>' +
-      '</div>' +
-      '<div id="card-' + idx + '-downloads"></div>' +
-      '<div class="file-tabs" id="card-' + idx + '-tabs"></div>' +
-      '<div class="code-viewer" id="card-' + idx + '-viewer"></div>' +
-      '<div class="card-error hidden" id="card-' + idx + '-error"></div>' +
-    '</div>';
-  resultsContainer.insertBefore(card, resultsContainer.firstChild);
-  return idx;
+const STATUS_PILL = {
+  pass: 'bg-ok/15 text-ok',
+  warn: 'bg-warn/15 text-warn',
+  fail: 'bg-fail/15 text-fail',
+};
+
+const TYPE_PILL = {
+  concept: 'bg-concept/15 text-concept',
+  task: 'bg-task/15 text-task',
+  reference: 'bg-reference/15 text-reference',
+};
+
+const history = JSON.parse(localStorage.getItem('p2d_history') || '[]');
+function renderHistory() {
+  const box = $('#history');
+  if (!history.length) { box.innerHTML = '<div class="text-muted italic">No conversions yet</div>'; return; }
+  box.innerHTML = history.slice(-10).reverse().map(h => `
+    <div class="flex items-center justify-between gap-2 py-1 px-2 rounded hover:bg-surface">
+      <span class="truncate flex-1">${escape(h.name)}</span>
+      <span class="text-muted text-[10px]">${h.topics}t · ${h.time}s</span>
+      <span class="text-${h.passed ? 'ok' : 'warn'}">${h.passed ? '✓' : '!'}</span>
+    </div>
+  `).join('');
 }
+renderHistory();
 
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+const dz = $('#dropzone'), fi = $('#fileInput');
+dz.addEventListener('click', () => fi.click());
+['dragenter','dragover'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('dragover'); }));
+['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('dragover'); }));
+dz.addEventListener('drop', ev => handleFiles([...ev.dataTransfer.files]));
+fi.addEventListener('change', ev => handleFiles([...ev.target.files]));
 
-async function handleFile(file) {
-  if (!file.name.endsWith('.pdf')) { alert('Please upload a PDF file: ' + file.name); return; }
-
-  const idx = makeCard(file);
-  const stagesEl = document.getElementById('card-' + idx + '-stages');
-  const elapsedEl = document.getElementById('card-' + idx + '-elapsed');
-  const errorEl = document.getElementById('card-' + idx + '-error');
-
-  stagesEl.innerHTML = '<div class="stage active">' +
-    '<span class="stage-icon"><span class="spinner"></span></span>' +
-    '<span class="stage-name">Processing...</span>' +
-    '<span class="stage-detail" style="color:var(--muted)">multi-topic PDFs take 1-3 min; repair loops add ~30s each</span></div>';
-
-  const startTs = Date.now();
-  const tickHandle = setInterval(() => {
-    elapsedEl.textContent = Math.floor((Date.now() - startTs) / 1000) + 's';
-  }, 1000);
-
-  const form = new FormData();
-  form.append('file', file);
-
+$('#sampleBtn').addEventListener('click', async () => {
+  $('#empty').classList.add('hidden');
+  $('#results').classList.remove('hidden');
+  const placeholder = startCard({ name: 'synthetic_alert_system.pdf' });
   try {
-    const resp = await fetch('/convert', { method: 'POST', body: form });
-    clearInterval(tickHandle);
-    const data = await resp.json();
-    elapsedEl.textContent = Math.floor((Date.now() - startTs) / 1000) + 's (done)';
+    const r = await fetch('/sample');
+    const j = await r.json();
+    if (j.error) renderError(placeholder, new Error(j.error));
+    else renderResult(placeholder, 'synthetic_alert_system.pdf', j);
+  } catch (e) { renderError(placeholder, e); }
+});
 
-    if (data.error) {
-      errorEl.innerHTML = '<strong>Error:</strong> ' + escapeHtml(data.error);
-      errorEl.classList.remove('hidden');
-      stagesEl.innerHTML = '';
-      return;
-    }
+$$('.tab-btn').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.tab === 'about') $('#aboutModal').classList.remove('hidden');
+}));
+$('#aboutClose').addEventListener('click', () => $('#aboutModal').classList.add('hidden'));
 
-    renderStages(idx, data.stages);
-    renderMetrics(idx, data.metrics);
-    renderPlan(idx, data.plan);
-    renderFiles(idx, data.files, data.session_id);
+async function handleFiles(files) {
+  if (!files.length) return;
+  files = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (!files.length) return alert('Only .pdf files accepted.');
 
-  } catch (err) {
-    clearInterval(tickHandle);
-    elapsedEl.textContent = Math.floor((Date.now() - startTs) / 1000) + 's (failed)';
-    errorEl.innerHTML = '<strong>Network error:</strong> ' + escapeHtml(err.message);
-    errorEl.classList.remove('hidden');
-    stagesEl.innerHTML = '';
+  $('#empty').classList.add('hidden');
+  $('#results').classList.remove('hidden');
+
+  const placeholders = files.map(f => startCard({ name: f.name }));
+  await Promise.all(files.map(async (f, idx) => {
+    const card = placeholders[idx];
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const r = await fetch('/convert', { method: 'POST', body: fd });
+      const j = await r.json();
+      if (j.error) renderError(card, new Error(j.error));
+      else renderResult(card, f.name, j);
+    } catch (e) { renderError(card, e); }
+  }));
+}
+
+function startCard({ name }) {
+  const tpl = $('#cardTpl').content.cloneNode(true);
+  const card = tpl.querySelector('article');
+  card.querySelector('[data-slot="filename"]').textContent = name;
+  card.querySelector('[data-slot="subtitle"]').textContent = 'Processing…';
+  card.querySelector('[data-slot="stages"]').innerHTML = `<div class="text-xs text-muted pulse-soft">Starting pipeline…</div>`;
+  card.querySelector('[data-slot="closeBtn"]').addEventListener('click', () => card.remove());
+  $('#results').appendChild(card);
+  return card;
+}
+
+function renderError(card, e) {
+  const sub = card.querySelector('[data-slot="subtitle"]');
+  sub.innerHTML = `<span class="text-fail">Error:</span> ${escape(e.message || String(e))}`;
+  card.querySelector('[data-slot="stages"]').innerHTML = '';
+}
+
+function renderResult(card, name, j) {
+  const passed = j.metrics?.html5 || (j.metrics?.xml_valid === j.metrics?.xml_total);
+  card.querySelector('[data-slot="subtitle"]').innerHTML =
+    `<span class="${passed ? 'text-ok' : 'text-warn'}">●</span> ${j.metrics.processing_time}s · ${j.metrics.mode} · ${escape(j.metrics.model || '')}`;
+  const badge = card.querySelector('[data-slot="badge"]');
+  badge.textContent = `${j.metrics.topics_generated} topic${j.metrics.topics_generated===1?'':'s'}`;
+  badge.className = 'px-2 py-0.5 text-[10px] rounded-md font-medium bg-accent/15 text-accent';
+
+  if (j.session_id) {
+    const zb = card.querySelector('[data-slot="zipBtn"]');
+    zb.href = `/zip/${j.session_id}`;
+    zb.classList.remove('hidden');
   }
-}
 
-function renderStages(idx, stages) {
-  const el = document.getElementById('card-' + idx + '-stages');
-  el.innerHTML = stages.map(s => {
-    const icon = s.status === 'done' ? '&#10003;' : s.status === 'error' ? '&#10007;' : '...';
-    const iconColor = s.status === 'done' ? 'var(--green)' : s.status === 'error' ? 'var(--red)' : 'var(--muted)';
-    const mode = s.mode ? ' <span style="color:var(--accent);font-size:0.7rem">[' + s.mode + ']</span>' : '';
-    return '<div class="stage ' + s.status + '">' +
-      '<span class="stage-icon" style="color:' + iconColor + '">' + icon + '</span>' +
-      '<span class="stage-name">' + s.name + mode + '</span>' +
-      '<span class="stage-time">' + s.time + 's</span></div>';
-  }).join('');
-}
+  const stagesBox = card.querySelector('[data-slot="stages"]');
+  stagesBox.innerHTML = (j.stages || []).map(s => `
+    <div class="flex items-center gap-3 py-1 text-xs">
+      <div class="w-4">${STAGE_ICONS[s.status] || STAGE_ICONS.done}</div>
+      <div class="w-32 text-text">${escape(s.name)}</div>
+      <div class="text-muted flex-1 truncate" title="${escape(s.detail || '')}">${escape(s.detail || '')}</div>
+      <div class="text-muted font-mono">${(s.time ?? 0).toFixed(2)}s</div>
+    </div>
+  `).join('');
 
-function renderMetrics(idx, m) {
-  const el = document.getElementById('card-' + idx + '-metrics');
+  const m = j.metrics;
+  const metricsBox = card.querySelector('[data-slot="metrics"]');
   const cards = [
-    { label: 'Topics', value: m.topics_generated },
-    { label: 'XML valid', value: m.xml_valid + '/' + m.xml_total, ok: m.xml_valid === m.xml_total },
-    { label: '@class', value: m.class_coverage, ok: true },
-    { label: 'Time', value: m.processing_time + 's' },
-    { label: 'Mode', value: m.mode },
-    { label: 'Errors', value: m.errors.length, ok: m.errors.length === 0 },
+    { label: 'Topics',     value: m.topics_generated, ok: m.topics_generated > 0 },
+    { label: 'XML valid',  value: `${m.xml_valid}/${m.xml_total}`, ok: m.xml_valid === m.xml_total },
+    { label: '@class',     value: m.class_coverage, ok: true },
+    { label: 'HTML5',      value: m.html5 ? 'PASS' : '—', ok: !!m.html5 },
+    { label: 'Time',       value: `${m.processing_time}s`, ok: m.processing_time < 60 },
+    { label: 'Mode',       value: m.mode, ok: m.mode === 'LLM' },
   ];
-  el.innerHTML = cards.map(c =>
-    '<div class="metric-card"><div class="label">' + c.label + '</div>' +
-    '<div class="value' + (c.ok ? ' ok' : '') + '">' + c.value + '</div></div>'
-  ).join('');
-}
+  metricsBox.innerHTML = cards.map(c => `
+    <div class="bg-surface border border-border rounded-lg p-3">
+      <div class="text-[10px] uppercase tracking-wider text-muted">${c.label}</div>
+      <div class="text-lg font-semibold mt-0.5 ${c.ok ? 'text-text' : 'text-warn'}">${escape(c.value)}</div>
+    </div>
+  `).join('');
 
-function renderPlan(idx, plan) {
-  if (!plan || !plan.length) return;
-  const section = document.getElementById('card-' + idx + '-plan');
-  section.classList.remove('hidden');
-  const el = document.getElementById('card-' + idx + '-planList');
-  el.innerHTML = plan.map(p =>
-    '<div class="topic-card"><span class="type-badge ' + p.type + '">' + p.type + '</span>' +
-    '<h4>' + escapeHtml(p.title) + '</h4>' +
-    '<div class="sections">' + p.sections.map(escapeHtml).join(' + ') + '</div></div>'
-  ).join('');
-}
+  const fBox = card.querySelector('[data-slot="features"]');
+  fBox.innerHTML = Object.entries(m.features || {}).map(([k, v]) => `
+    <li class="flex items-start gap-2">
+      <span class="font-mono text-muted w-5">${k}.</span>
+      <span class="px-1.5 py-0.5 rounded text-[10px] font-medium ${STATUS_PILL[v.status]}">${v.status}</span>
+      <span class="text-muted flex-1">${escape(FEATURE_LABELS[k] || k)} — <span class="text-text">${escape(v.detail || '')}</span></span>
+    </li>
+  `).join('');
 
-function renderFiles(idx, files, sessionId) {
-  const tabs = document.getElementById('card-' + idx + '-tabs');
-  const viewer = document.getElementById('card-' + idx + '-viewer');
-  const dlBar = document.getElementById('card-' + idx + '-downloads');
-  const names = Object.keys(files);
+  const semBox = card.querySelector('[data-slot="semantic"]');
+  const sem = m.semantic || {};
+  const semEntries = Object.entries(sem).filter(([,v]) => v > 0);
+  semBox.innerHTML = semEntries.length
+    ? semEntries.map(([k, v]) => `<span class="bg-surface border border-border rounded-md px-2 py-1 text-xs">${k} <span class="text-muted font-mono">×${v}</span></span>`).join('')
+    : `<span class="text-muted text-xs italic">(none — heuristic mode)</span>`;
 
-  dlBar.innerHTML = '<strong style="font-size:0.85rem;color:var(--muted);margin-right:6px">Download:</strong>' +
-    names.map(n => '<a class="dl-link" href="/file/' + sessionId + '/' + encodeURIComponent(n) + '" download>' + n + '</a>').join('') +
-    (sessionId ? '<a class="dl-link dl-zip" href="/zip/' + sessionId + '" download>all as .zip</a>' : '');
+  const planBox = card.querySelector('[data-slot="plan"]');
+  planBox.innerHTML = (j.plan || []).map(p => `
+    <li class="flex items-center gap-2">
+      <span class="px-1.5 py-0.5 rounded text-[10px] font-medium ${TYPE_PILL[p.type] || ''}">${p.type}</span>
+      <span class="text-text truncate">${escape(p.title)}</span>
+    </li>
+  `).join('');
 
-  tabs.innerHTML = names.map((name, i) => {
-    let type = 'ditamap';
-    if (name.startsWith('c_')) type = 'concept';
-    else if (name.startsWith('t_')) type = 'task';
-    else if (name.startsWith('r_')) type = 'reference';
-    return '<button class="file-tab' + (i === 0 ? ' active' : '') + '" data-file="' + name + '">' +
-      '<span class="type-dot ' + type + '"></span>' + name + '</button>';
-  }).join('');
-
-  if (names.length) viewer.innerHTML = highlightXML(files[names[0]]);
-
-  tabs.querySelectorAll('.file-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.querySelectorAll('.file-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      viewer.innerHTML = highlightXML(files[tab.dataset.file]);
+  const tabsBox = card.querySelector('[data-slot="fileTabs"]');
+  const ditaPane = card.querySelector('[data-slot="ditaPane"]');
+  const codeEl   = card.querySelector('[data-slot="ditaCode"]');
+  const filenames = Object.keys(j.files || {});
+  tabsBox.innerHTML = filenames.map((n, i) => `
+    <button data-file="${escape(n)}" class="file-tab text-xs px-3 py-1.5 rounded-md hover:bg-surface transition ${i===0 ? 'bg-surface text-text border border-border' : 'text-muted'}">${escape(n)}</button>
+  `).join('');
+  const showFile = (name) => {
+    ditaPane.classList.remove('hidden');
+    card.querySelector('[data-slot="htmlPane"]').classList.add('hidden');
+    codeEl.textContent = j.files[name];
+    delete codeEl.dataset.highlighted;
+    hljs.highlightElement(codeEl);
+    $$('.file-tab', tabsBox).forEach(b => {
+      const active = b.dataset.file === name;
+      b.classList.toggle('bg-surface', active);
+      b.classList.toggle('text-text', active);
+      b.classList.toggle('border', active);
+      b.classList.toggle('border-border', active);
+      b.classList.toggle('text-muted', !active);
     });
+    card.querySelector('[data-slot="htmlTab"]').classList.remove('bg-surface');
+  };
+  $$('.file-tab', tabsBox).forEach(b => b.addEventListener('click', () => showFile(b.dataset.file)));
+  if (filenames[0]) showFile(filenames[0]);
+
+  if (m.html5_url) {
+    const ht = card.querySelector('[data-slot="htmlTab"]');
+    const hp = card.querySelector('[data-slot="htmlPane"]');
+    const hf = card.querySelector('[data-slot="htmlFrame"]');
+    ht.classList.remove('hidden');
+    ht.addEventListener('click', () => {
+      ditaPane.classList.add('hidden');
+      hp.classList.remove('hidden');
+      if (!hf.src) hf.src = m.html5_url;
+      ht.classList.add('bg-surface');
+      $$('.file-tab', tabsBox).forEach(b => { b.classList.remove('bg-surface','text-text','border','border-border'); b.classList.add('text-muted'); });
+    });
+  }
+
+  history.push({
+    name,
+    topics: m.topics_generated,
+    time: m.processing_time,
+    passed: !!m.html5 || (m.xml_valid === m.xml_total),
+    when: Date.now(),
   });
+  localStorage.setItem('p2d_history', JSON.stringify(history.slice(-20)));
+  renderHistory();
 }
 
-function highlightXML(xml) {
-  return xml
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/(&lt;\?xml[^?]*\?&gt;)/g, '<span class="xml-doctype">$1</span>')
-    .replace(/(&lt;!DOCTYPE[^&]*&gt;)/g, '<span class="xml-doctype">$1</span>')
-    .replace(/(&lt;\/?)([\w:-]+)/g, '$1<span class="xml-tag">$2</span>')
-    .replace(/([\w:-]+)(=)(&quot;|")/g, '<span class="xml-attr">$1</span>$2$3')
-    .replace(/(&quot;|")(.*?)(&quot;|")/g, '"<span class="xml-val">$2</span>"');
+function escape(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 </script>
+
 </body>
 </html>

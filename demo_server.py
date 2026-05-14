@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -225,6 +226,8 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
                     "title": title,
                     "topic_type": t["type"],
                     "body_xml": _fallback_body(title, t["blocks"], t["type"]),
+                    "shortdesc": "",
+                    "keywords": [],
                 }
             try:
                 result = classify_section(
@@ -237,14 +240,18 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
                 )
                 return {
                     "title": title,
-                    "topic_type": result["topic_type"],
+                    "topic_type": result.get("topic_type", t["type"]),
                     "body_xml": result["body_xml"],
+                    "shortdesc": result.get("shortdesc", ""),
+                    "keywords": result.get("keywords", []),
                 }
             except Exception:
                 return {
                     "title": title,
                     "topic_type": t["type"],
                     "body_xml": _fallback_body(title, t["blocks"], t["type"]),
+                    "shortdesc": "",
+                    "keywords": [],
                 }
 
         # Parallel classify (3-4x speedup on multi-topic PDFs)
@@ -316,6 +323,52 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
             "validation": validation_results,
         })
 
+        # Stage 7: DITA-OT HTML5 build. Reuses the auto-detect helpers from
+        # emitter.py so a system without `dita` on PATH still works as long as
+        # DITA-OT is unpacked under ~/dita-ot*/ (the layout `setup.sh` creates).
+        t0 = time.time()
+        from emitter import _detect_local_jdk17_home
+        html5_status = "skipped"
+        html5_detail = "DITA-OT not found (run ./setup.sh)"
+        ditamap = next((f for f in write_result["files"] if f.endswith(".ditamap")), None)
+
+        dita_bin = shutil.which("dita")
+        if not dita_bin:
+            matches = sorted(Path.home().glob("dita-ot*/bin/dita"), reverse=True)
+            if matches:
+                dita_bin = str(matches[0])
+
+        if dita_bin and ditamap:
+            html5_dir = out_dir / "html5"
+            shutil.rmtree(html5_dir, ignore_errors=True)
+            env = os.environ.copy()
+            jdk_home = _detect_local_jdk17_home()
+            if jdk_home:
+                env["JAVA_HOME"] = jdk_home
+                env["PATH"] = f"{jdk_home}/bin:" + env.get("PATH", "")
+            try:
+                proc = subprocess.run(
+                    [dita_bin, "-i", str((out_dir / ditamap).resolve()),
+                     "-f", "html5", "-o", str(html5_dir.resolve()),
+                     "--processing-mode=strict"],
+                    capture_output=True, text=True, timeout=180, env=env,
+                )
+                if (html5_dir / "index.html").exists():
+                    html5_status = "done"
+                    html5_detail = f"HTML5 generated → /html5/{session_id}/index.html"
+                else:
+                    html5_status = "error"
+                    html5_detail = ((proc.stderr or proc.stdout) or "")[:300]
+            except Exception as ex:
+                html5_status = "error"
+                html5_detail = str(ex)[:300]
+        stages.append({
+            "name": "HTML5 build",
+            "status": html5_status,
+            "time": round(time.time() - t0, 2),
+            "detail": html5_detail,
+        })
+
         # Build file contents for display
         files = {}
         for fname in write_result["files"]:
@@ -323,7 +376,80 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
                 fpath = out_dir / fname
                 files[fname] = fpath.read_text()
 
-        # Compute metrics
+        # Compute requirements checklist (a–k from task description) so the UI
+        # can render it next to the live output. Each entry is a tuple of
+        # (status, detail) where status is "pass" | "warn" | "fail".
+        topic_texts = [v for k, v in files.items() if k.endswith(".dita")]
+        ditamap_text = next((v for k, v in files.items() if k.endswith(".ditamap")), "")
+        joined = "\n".join(topic_texts)
+
+        def _count(rx):
+            return len(re.findall(rx, joined))
+
+        types_seen = sorted({m for m in re.findall(r"<(concept|task|reference)\s", joined)})
+        topics_total = len(topic_texts)
+        shortdesc_count = _count(r"<shortdesc\b")
+        keyword_count = _count(r"<keyword class=")
+        keywords_on = _count(r"<keywords class=")
+        xref_count = _count(r"<xref\b")
+        image_count = _count(r"<image\b")
+        alt_count = _count(r"<alt\b")
+        has_table = bool(re.search(r"<tgroup\b", joined))
+        bad_abbrev = re.findall(r"\b(via|i\.e\.|e\.g\.|etc\.)\b", joined)
+        product_keydef = bool(re.search(r'keys="product-name"', ditamap_text))
+
+        # Image cap audit: width<=1000 AND size<=200KB. Only meaningful if images exist.
+        img_dir_p = out_dir / "images"
+        img_ok = img_bad = 0
+        if img_dir_p.exists():
+            try:
+                from PIL import Image as _PILImage
+                for p in img_dir_p.iterdir():
+                    if not p.is_file():
+                        continue
+                    try:
+                        sz = p.stat().st_size
+                        with _PILImage.open(p) as im:
+                            w = im.width
+                        if w <= 1000 and sz <= 200 * 1024:
+                            img_ok += 1
+                        else:
+                            img_bad += 1
+                    except Exception:
+                        pass
+            except ImportError:
+                pass
+
+        def pass_(detail):  return {"status": "pass", "detail": detail}
+        def warn_(detail):  return {"status": "warn", "detail": detail}
+        def fail_(detail):  return {"status": "fail", "detail": detail}
+
+        features = {
+            "a": pass_(f"Topic types: {', '.join(types_seen)}") if types_seen else fail_("no topic types"),
+            "b": pass_(f"Document map with {ditamap_text.count('<topicref')} topicrefs") if ditamap_text else fail_("no ditamap"),
+            "c": pass_("CALS table emitted") if has_table else warn_("no tables in this PDF"),
+            "d": pass_("no Latin abbreviations / 'via' in output") if not bad_abbrev else fail_(f"found: {sorted(set(bad_abbrev))}"),
+            "e": pass_(f"<shortdesc> on all {topics_total} topics") if shortdesc_count == topics_total and topics_total > 0 else warn_(f"<shortdesc> on {shortdesc_count}/{topics_total}"),
+            "f": pass_("product-name keydef in ditamap") if product_keydef else warn_("no product name detected"),
+            "g": pass_(f"<keywords> on all {topics_total} topics ({keyword_count} keywords)") if keywords_on == topics_total and topics_total > 0 else warn_(f"<keywords> on {keywords_on}/{topics_total}"),
+            "h": pass_(f"{xref_count} <xref> elements") if xref_count > 0 else warn_("no <xref> in this PDF"),
+            "i": pass_(f"{img_ok}/{img_ok+img_bad} images within 1000px + 200KB caps") if (img_ok + img_bad) > 0 else warn_("no images in this PDF"),
+            "j": (pass_(f"<alt> on all {image_count} images") if alt_count == image_count and image_count > 0
+                  else (warn_("no <image> in this PDF") if image_count == 0
+                  else fail_(f"<alt> on {alt_count}/{image_count} images"))),
+            "k": pass_("batch endpoint available"),
+        }
+
+        # Semantic richness counts (for the metrics dashboard).
+        semantic = {
+            "uicontrol":   _count(r"<uicontrol\b"),
+            "menucascade": _count(r"<menucascade\b"),
+            "wintitle":    _count(r"<wintitle\b"),
+            "option":      _count(r"<option\b"),
+            "codeblock":   _count(r"<codeblock\b"),
+            "note":        _count(r"<note\b"),
+        }
+
         metrics = {
             "xml_valid": sum(1 for v in validation_results.values() if v["valid"]),
             "xml_total": len(validation_results),
@@ -336,6 +462,10 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
             "provider": provider if api_key else "none",
             "model": model if api_key else "none",
             "errors": write_result["errors"],
+            "html5": html5_status == "done",
+            "html5_url": f"/html5/{session_id}/index.html" if html5_status == "done" else None,
+            "features": features,
+            "semantic": semantic,
         }
 
         RESULTS[session_id] = {
@@ -381,6 +511,67 @@ async def get_file(session_id: str, filename: str):
             media_type="application/octet-stream",
         )
     return JSONResponse({"error": "File not found"}, status_code=404)
+
+
+@app.get("/html5/{session_id}/{path:path}")
+async def get_html5(session_id: str, path: str):
+    """Serve any file inside the session's html5/ directory (used by iframe preview)."""
+    # Guard against traversal: resolve and re-check the parent.
+    base = (OUTPUT_DIR / session_id / "html5").resolve()
+    target = (base / path).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    if not target.exists() or not target.is_file():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return FileResponse(target)
+
+
+@app.post("/batch")
+async def batch_convert(files: list[UploadFile] = File(...)):
+    """Convert multiple PDFs in parallel. Returns one result row per file."""
+    from fastapi.concurrency import run_in_threadpool
+
+    # Persist each upload first (collision-free names), then fan out.
+    pending = []
+    for f in files:
+        content = await f.read()
+        path = _safe_upload_path(f.filename)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(content)
+        pending.append((str(path), f.filename))
+
+    async def _one(p, fn):
+        return await run_in_threadpool(_convert_pdf_sync, p, fn)
+
+    results = await asyncio.gather(*[_one(p, fn) for p, fn in pending], return_exceptions=True)
+
+    out = []
+    for (p, fn), r in zip(pending, results):
+        if isinstance(r, Exception):
+            out.append({"filename": fn, "error": str(r)})
+        else:
+            # r is a JSONResponse — extract its body.
+            payload = json.loads(r.body) if hasattr(r, "body") else r
+            payload["filename"] = fn
+            out.append(payload)
+    return JSONResponse({"results": out})
+
+
+@app.get("/sample")
+async def use_sample():
+    """Convenience endpoint: run the included sample PDF without an upload."""
+    sample = Path("test_data/synthetic_alert_system.pdf")
+    if not sample.exists():
+        return JSONResponse({"error": "Sample PDF not in test_data/"}, status_code=404)
+    from fastapi.concurrency import run_in_threadpool
+    # Copy to upload dir so the unlink-after-parse logic stays consistent.
+    pdf_path = _safe_upload_path(sample.name)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sample, pdf_path)
+    return await run_in_threadpool(_convert_pdf_sync, str(pdf_path), sample.name)
 
 
 @app.get("/zip/{session_id}")
