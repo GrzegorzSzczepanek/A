@@ -85,7 +85,7 @@ function PipelineView({ stages, logs, onComplete }) {
                   )}
                 </div>
                 <div className="pipeline-label">{stage.name}</div>
-                {stage.time != null && (
+                {stage.status === 'done' && stage.time != null && stage.time !== '-' && (
                   <div className="pipeline-time">{stage.time}s</div>
                 )}
               </div>
