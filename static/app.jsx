@@ -10,7 +10,8 @@ function App() {
   const [files, setFiles] = React.useState([]);
   const [stages, setStages] = React.useState([]);
   const [logs, setLogs] = React.useState([]);
-  const [results, setResults] = React.useState(null);
+  const [results, setResults] = React.useState(null); // Array of result objects
+  const [selectedResultIdx, setSelectedResultIdx] = React.useState(0);
 
   // Apply theme
   React.useEffect(() => {
@@ -33,12 +34,16 @@ function App() {
     setFiles(prev => [...prev, ...processed]);
   }, []);
 
+  const handleFileRemoved = React.useCallback((index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
   // Load sample file (mock path - no real File object available)
   const handleLoadSample = React.useCallback(() => {
     setFiles([MockAPI.getMockFile()]);
   }, []);
 
-  // Start conversion - posts to /convert when a real File is available,
+  // Start conversion - posts to /convert or /batch when real Files are available,
   // otherwise falls back to the mock pipeline (sample button).
   const startConversion = React.useCallback(async () => {
     if (files.length === 0) return;
@@ -47,13 +52,19 @@ function App() {
     setStages(MockAPI.STAGES.map(s => ({ ...s, status: 'queued', time: null })));
 
     try {
-      const realFile = files[0] && files[0]._raw;
+      const realFiles = files.filter(f => f._raw).map(f => f._raw);
+      // If we have real files, use them. If none (sample mode), pass null.
+      const pipelineInput = realFiles.length > 0 ? realFiles : null;
+      
       const result = await MockAPI.runPipeline(
         (updatedStages) => setStages([...updatedStages]),
         (logEntry) => setLogs(prev => [...prev, logEntry]),
-        realFile,
+        pipelineInput,
       );
-      setResults(result);
+      
+      const resultsArray = Array.isArray(result) ? result : [result];
+      setResults(resultsArray);
+      setSelectedResultIdx(0);
     } catch (err) {
       console.error('Conversion failed', err);
       setLogs(prev => [...prev, { stage: 'Error', msg: String(err.message || err), time: '-' }]);
@@ -130,7 +141,7 @@ function App() {
     <div>
       {/* Header */}
       <header className="app-header">
-        <div className="app-header__brand">
+        <div className="app-header__brand" onClick={handleReset} style={{ cursor: 'pointer' }}>
           <div className="app-header__logo">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M2 7l5-5 5 5-5 5z" fill="white" opacity="0.9"/>
@@ -176,6 +187,7 @@ function App() {
           <UploadView
             files={files}
             onFilesAdded={handleFilesAdded}
+            onRemoveFile={handleFileRemoved}
             onStartConversion={startConversion}
             onLoadSample={handleLoadSample}
           />
@@ -191,9 +203,9 @@ function App() {
 
         {view === 'results' && results && (
           <ResultsView
-            topics={results.topics}
-            ditamap={results.ditamap}
-            validation={results.validation}
+            results={results}
+            selectedIdx={selectedResultIdx}
+            onSelectResult={setSelectedResultIdx}
           />
         )}
       </main>

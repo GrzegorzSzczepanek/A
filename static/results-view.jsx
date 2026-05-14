@@ -1,66 +1,86 @@
 // results-view.jsx — Results explorer, validation, export, comparison
 
-// ===== TOPIC TREE (left panel) =====
-function TopicTree({ topics, ditamap, selectedId, onSelect, onSelectMap }) {
-  const mapNode = MockAPI.DITA_STRUCTURE[0];
+// ===== PROJECT EXPLORER (left panel) =====
+function ProjectExplorer({ results, selectedIdx, onSelectResult, selectedTopicId, onSelectTopic }) {
+  const [search, setSearch] = React.useState('');
+
+  const filteredResults = React.useMemo(() => {
+    if (!search) return results;
+    return results.filter(r => 
+      (r.doc_title || '').toLowerCase().includes(search.toLowerCase()) ||
+      r.topics.some(t => t.filename.toLowerCase().includes(search.toLowerCase()))
+    );
+  }, [results, search]);
+
   return (
-    <div className="card" style={{ padding: 12, height: '100%' }}>
-      <div className="section-label">Document Map</div>
-
-      {/* Ditamap root */}
-      <div
-        className={`tree-node ${selectedId === '__map' ? 'tree-node--selected' : ''}`}
-        onClick={() => onSelectMap()}
-      >
-        <IconTree />
-        <span className="tree-node__label" style={{ fontWeight: 500, fontSize: 12 }}>
-          {mapNode.label}
-        </span>
-        <TypeBadge type="map" />
+    <div className="card project-explorer">
+      <div className="search-container">
+        <input
+          type="text"
+          className="search-input"
+          placeholder="Search docs or topics..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
       </div>
-
-      {/* Topic children */}
-      <div className="tree-children">
-        {mapNode.children.map(child => {
-          const topic = topics.find(t => t.id === child.topicId);
-          if (!topic) return null;
+      
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {filteredResults.map((result, resIdx) => {
+          // Find original index in results array for selection
+          const originalIdx = results.indexOf(result);
+          const isActive = selectedIdx === originalIdx;
+          
           return (
-            <div
-              key={topic.id}
-              className={`tree-node ${selectedId === topic.id ? 'tree-node--selected' : ''}`}
-              onClick={() => onSelect(topic.id)}
-            >
-              <span className={`type-dot type-dot--${topic.type}`}></span>
-              <span className="tree-node__label" title={topic.title}>
-                {topic.filename}
-              </span>
+            <div key={originalIdx} className={`doc-node ${isActive ? 'doc-node--active' : ''}`}>
+              <div className="doc-node__header" onClick={() => onSelectResult(originalIdx)}>
+                <IconChevron dir={isActive ? 'down' : 'right'} />
+                <IconDoc />
+                <span className="doc-node__title" title={result.doc_title}>
+                  {result.doc_title || result.ditamap?.filename || 'Untitled Document'}
+                </span>
+              </div>
+              
+              {isActive && (
+                <div className="doc-node__content">
+                  <div className="tree-children">
+                    {/* Map node */}
+                    <div
+                      className={`tree-node ${selectedTopicId === '__map' ? 'tree-node--selected' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); onSelectTopic('__map'); }}
+                    >
+                      <IconTree />
+                      <span className="tree-node__label" style={{ fontWeight: 500, fontSize: 11 }}>
+                        {result.ditamap.filename}
+                      </span>
+                    </div>
+
+                    {/* Topic nodes */}
+                    {result.topics.map(topic => (
+                      <div
+                        key={topic.id}
+                        className={`tree-node ${selectedTopicId === topic.id ? 'tree-node--selected' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); onSelectTopic(topic.id); }}
+                      >
+                        <span className={`type-dot type-dot--${topic.type}`}></span>
+                        <span className="tree-node__label" title={topic.title} style={{ fontSize: 11 }}>
+                          {topic.filename}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Local Export inside accordion */}
+                  <div style={{ padding: '8px 12px 4px' }}>
+                    <button className="btn btn--sm btn--ghost" style={{ width: '100%', fontSize: 10 }}
+                      onClick={(e) => { e.stopPropagation(); MockAPI.downloadZip(result.ditamap.sessionId); }}>
+                      <IconDownload /> Download ZIP
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
-      </div>
-
-      <div className="divider" style={{ margin: '16px 0' }}></div>
-
-      {/* Export section. Pass sessionId so backend serves the friendly
-          Content-Disposition filename and the ZIP basename is derived from
-          the source PDF title. */}
-      <div className="section-label">Export</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <button className="btn btn--sm" onClick={() => MockAPI.downloadZip(ditamap.sessionId)}>
-          <IconDownload /> Download ZIP
-        </button>
-        {topics.map(t => (
-          <button key={t.id} className="btn btn--sm btn--ghost" style={{ fontSize: 11, justifyContent: 'flex-start' }}
-            onClick={() => MockAPI.downloadFile(t.filename, t.xml, t.sessionId)}>
-            <span className={`type-dot type-dot--${t.type}`}></span>
-            {t.filename}
-          </button>
-        ))}
-        <button className="btn btn--sm btn--ghost" style={{ fontSize: 11, justifyContent: 'flex-start' }}
-          onClick={() => MockAPI.downloadFile(ditamap.filename, ditamap.xml, ditamap.sessionId)}>
-          <span className="type-dot type-dot--map"></span>
-          {ditamap.filename}
-        </button>
       </div>
     </div>
   );
@@ -295,10 +315,18 @@ function ComparisonOverlay({ onClose }) {
 }
 
 // ===== RESULTS VIEW (compositor) =====
-function ResultsView({ topics, ditamap, validation }) {
+function ResultsView({ results, selectedIdx, onSelectResult }) {
+  const currentResult = results[selectedIdx] || results[0];
+  const { topics, ditamap, validation, doc_title } = currentResult;
+  
   const [selectedId, setSelectedId] = React.useState(topics[0]?.id || null);
   const [previewMode, setPreviewMode] = React.useState('xml');
   const [showComparison, setShowComparison] = React.useState(false);
+
+  // Update selection when current result changes
+  React.useEffect(() => {
+    setSelectedId(topics[0]?.id || null);
+  }, [selectedIdx, topics]);
 
   const selectedTopic = topics.find(t => t.id === selectedId) || null;
   const isMap = selectedId === '__map';
@@ -329,10 +357,11 @@ function ResultsView({ topics, ditamap, validation }) {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         marginBottom: 16, flexWrap: 'wrap', gap: 12,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>
             Output Explorer
           </h2>
+
           <div style={{ display: 'flex', gap: 6 }}>
             {['concept', 'task', 'reference'].map(type => {
               const count = topics.filter(t => t.type === type).length;
@@ -352,12 +381,12 @@ function ResultsView({ topics, ditamap, validation }) {
 
       {/* Three-column grid */}
       <div className="results-grid">
-        <TopicTree
-          topics={topics}
-          ditamap={ditamap}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onSelectMap={() => setSelectedId('__map')}
+        <ProjectExplorer
+          results={results}
+          selectedIdx={selectedIdx}
+          onSelectResult={onSelectResult}
+          selectedTopicId={selectedId}
+          onSelectTopic={setSelectedId}
         />
         <PreviewPane
           topic={selectedTopic}

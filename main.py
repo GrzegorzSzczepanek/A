@@ -259,9 +259,9 @@ def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
 
     # Copy images to output dir
     if copy_images and Path(image_dir).exists():
-        for img in Path(image_dir).glob("*.png"):
-            dest = Path(output_dir) / img.name
-            if not dest.exists():
+        for ext in ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg"]:
+            for img in Path(image_dir).glob(ext):
+                dest = Path(output_dir) / img.name
                 shutil.copy2(img, dest)
                 print(f"  ✓ {img.name} (image)")
 

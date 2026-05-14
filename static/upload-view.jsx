@@ -1,6 +1,6 @@
 // upload-view.jsx — Upload / Ingestion view
 
-function UploadView({ files, onFilesAdded, onStartConversion, onLoadSample }) {
+function UploadView({ files, onFilesAdded, onRemoveFile, onStartConversion, onLoadSample }) {
   const [dragActive, setDragActive] = React.useState(false);
   const inputRef = React.useRef(null);
 
@@ -80,6 +80,7 @@ function UploadView({ files, onFilesAdded, onStartConversion, onLoadSample }) {
                 <th>Size</th>
                 <th>Pages</th>
                 <th>Status</th>
+                <th style={{ width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -98,6 +99,16 @@ function UploadView({ files, onFilesAdded, onStartConversion, onLoadSample }) {
                     }}>
                       <StatusDot status="done" /> Ready
                     </span>
+                  </td>
+                  <td>
+                    <button
+                      className="btn btn--icon"
+                      style={{ color: 'var(--text-muted)' }}
+                      onClick={(e) => { e.stopPropagation(); onRemoveFile(i); }}
+                      title="Remove file"
+                    >
+                      <IconX />
+                    </button>
                   </td>
                 </tr>
               ))}

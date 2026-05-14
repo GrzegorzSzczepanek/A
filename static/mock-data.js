@@ -384,11 +384,14 @@ window.MockAPI = {
     'XML validation':    'validate',
   },
 
-  async runPipeline(onStageUpdate, onLog, file) {
+  async runPipeline(onStageUpdate, onLog, input) {
     // Mock fallback when called without a File (legacy demo path).
-    if (!file) {
+    if (!input) {
       return this._runMockPipeline(onStageUpdate, onLog);
     }
+
+    const isBatch = Array.isArray(input);
+    const files = isBatch ? input : [input];
 
     const stages = STAGES.map(s => ({ ...s, status: 'queued', time: null }));
     onStageUpdate([...stages]);
@@ -397,6 +400,11 @@ window.MockAPI = {
     let activeIdx = 0;
     stages[0].status = 'active';
     onStageUpdate(stages.map(s => ({ ...s })));
+    
+    // Initial log
+    if (onLog) onLog({ stage: 'System', msg: `Starting pipeline for ${files.length} file(s)...`, time: '-' });
+    if (onLog) onLog({ stage: stages[0].name, msg: `Initializing ${stages[0].name.toLowerCase()}...`, time: '-' });
+
     const advance = setInterval(() => {
       if (activeIdx < stages.length - 1) {
         stages[activeIdx].status = 'done';
@@ -404,15 +412,30 @@ window.MockAPI = {
         activeIdx += 1;
         stages[activeIdx].status = 'active';
         onStageUpdate(stages.map(s => ({ ...s })));
+        
+        // Add optimistic log entry
+        if (onLog) {
+          onLog({ 
+            stage: stages[activeIdx].name, 
+            msg: `Running ${stages[activeIdx].name.toLowerCase()}...`, 
+            time: '-' 
+          });
+        }
       }
     }, 1800);
 
     let data;
     try {
       const form = new FormData();
-      form.append('file', file);
-      const resp = await fetch('/convert', { method: 'POST', body: form });
-      data = await resp.json();
+      if (isBatch) {
+        files.forEach(f => form.append('files', f));
+        const resp = await fetch('/batch', { method: 'POST', body: form });
+        data = await resp.json();
+      } else {
+        form.append('file', files[0]);
+        const resp = await fetch('/convert', { method: 'POST', body: form });
+        data = await resp.json();
+      }
     } catch (e) {
       clearInterval(advance);
       stages[activeIdx].status = 'error';
@@ -427,10 +450,28 @@ window.MockAPI = {
       throw new Error(data.error);
     }
 
-    // Replace stage timings with real backend numbers.
-    if (Array.isArray(data.stages)) {
+    // If batch, we might have multiple results. Return an array of adapted results.
+    if (isBatch && data.results) {
+      const allResults = data.results.filter(r => !r.error);
+      if (allResults.length === 0 && data.results.length > 0) {
+        throw new Error(data.results[0].error || 'Batch processing failed');
+      }
+      
+      // Use the first result's stages for the UI
+      this._updateStagesFromBackend(stages, allResults[0].stages, onStageUpdate, onLog);
+      
+      // Return array of adapted results
+      return allResults.map(r => this._adaptBackendResponse(r));
+    }
+
+    this._updateStagesFromBackend(stages, data.stages, onStageUpdate, onLog);
+    return this._adaptBackendResponse(data);
+  },
+
+  _updateStagesFromBackend(stages, backendStages, onStageUpdate, onLog) {
+    if (Array.isArray(backendStages)) {
       const stageMap = this._BACKEND_STAGE_MAP;
-      for (const bs of data.stages) {
+      for (const bs of backendStages) {
         const uiId = stageMap[bs.name];
         if (!uiId) continue;
         const s = stages.find(x => x.id === uiId);
@@ -448,8 +489,6 @@ window.MockAPI = {
       if (!s.time || s.time === '...') s.time = '-';
     });
     onStageUpdate(stages.map(s => ({ ...s })));
-
-    return this._adaptBackendResponse(data);
   },
 
   async _runMockPipeline(onStageUpdate, onLog) {
@@ -491,9 +530,15 @@ window.MockAPI = {
     const sessionId = data.session_id;
     const m = data.metrics || {};
     const plan = data.plan || [];
-
     const fileNames = Object.keys(files);
     const ditamapName = fileNames.find(n => n.endsWith('.ditamap'));
+    
+    // Improved title logic: AI title > backend filename > ditamap name > fallback
+    let doc_title = data.doc_title;
+    if (!doc_title || doc_title === 'Untitled Document') {
+      doc_title = data.filename || ditamapName || 'Untitled Document';
+    }
+
     const topicNames = fileNames.filter(n => n !== ditamapName);
 
     const typeFromPrefix = (name) => {
@@ -574,6 +619,7 @@ window.MockAPI = {
         semantic,
         features,
       },
+      doc_title,
     };
   },
 

@@ -321,12 +321,14 @@ def _wrap_inline_run_in_p(elem) -> bool:
     if not children and not has_text:
         return False
 
+    # Check if all children are inline tags
     inline_only = all(
         etree.QName(c.tag).localname in _INLINE_TAGS for c in children
     )
     if not (has_text or inline_only):
         return False
-    if not inline_only:
+    # If there are children but some have non-inline tails, we can't easily wrap
+    if children and any(c.tail and c.tail.strip() and not inline_only for c in children):
         return False
 
     p = etree.Element("p")
@@ -334,6 +336,7 @@ def _wrap_inline_run_in_p(elem) -> bool:
     p.text = elem.text
     elem.text = None
     for c in children:
+        # Move child to p, preserving tail
         elem.remove(c)
         p.append(c)
     elem.append(p)
@@ -387,6 +390,18 @@ def _fix_empty_tgroup(body_xml: str) -> str:
     return re.sub(r"<tgroup[\s\S]*?</tgroup>", fix_one, body_xml)
 
 
+import textwrap
+
+def _wrap_text(text: Optional[str], width: int = 80, indent: str = "") -> Optional[str]:
+    if not text or len(text) <= width:
+        return text
+    # Wrap text while preserving existing newlines if they look intentional,
+    # but for LLM output they are usually just one long run.
+    wrapped = textwrap.fill(text, width=width, initial_indent=indent,
+                            subsequent_indent=indent, break_long_words=False,
+                            replace_whitespace=False)
+    return wrapped
+
 def _fix_content_model(body_xml: str) -> str:
     """
     Fix common DITA content model violations in LLM-generated XML.
@@ -395,6 +410,7 @@ def _fix_content_model(body_xml: str) -> str:
     - Bare text in container elements → wrapped in <p>
     - <p> directly in <refbody> → wrapped in <section>
     - <codeblock>/<p> directly in <step> → wrapped in <info>
+    - Line wrapping for text nodes > 80 chars
     """
     body_xml = _fix_malformed_attrs(body_xml)
     # Collapse duplicate close tags that LLMs emit on table cells, e.g.
@@ -428,6 +444,15 @@ def _fix_content_model(body_xml: str) -> str:
 
     for elem in root.iter():
         tag = etree.QName(elem.tag).localname if isinstance(elem.tag, str) else ""
+
+        # Wrap long text nodes (except in codeblock)
+        if tag != "codeblock":
+            if elem.text and len(elem.text.strip()) > 80:
+                elem.text = _wrap_text(elem.text.strip())
+                modified = True
+            if elem.tail and len(elem.tail.strip()) > 80:
+                elem.tail = _wrap_text(elem.tail.strip())
+                modified = True
 
         # Fix 1: when a block-required container holds only inline content
         # (plus text), wrap everything in a single <p>. This preserves the
@@ -471,7 +496,33 @@ def _fix_content_model(body_xml: str) -> str:
 
         # Fix 3: <codeblock> or <p> directly in <step> → wrap in <info>
         if tag == "step":
-            bad_children = [c for c in elem if c.tag in ("codeblock", "p")]
+            # Ensure cmd is present. If missing, turn first p into cmd or invent one.
+            children = list(elem)
+            has_cmd = any(etree.QName(c.tag).localname == "cmd" for c in children)
+            if not has_cmd:
+                # Find first child that could be a cmd (text or p)
+                if elem.text and elem.text.strip():
+                    cmd = etree.Element("cmd")
+                    cmd.set("class", "- topic/ph task/cmd ")
+                    cmd.text = elem.text
+                    elem.text = None
+                    elem.insert(0, cmd)
+                    modified = True
+                elif children and etree.QName(children[0].tag).localname == "p":
+                    p = children[0]
+                    p.tag = "cmd"
+                    p.set("class", "- topic/ph task/cmd ")
+                    modified = True
+                else:
+                    cmd = etree.Element("cmd")
+                    cmd.set("class", "- topic/ph task/cmd ")
+                    cmd.text = "Complete this step."
+                    elem.insert(0, cmd)
+                    modified = True
+
+            # Fix order: cmd must be first (after notes).
+            # Then wrap other block elements in info.
+            bad_children = [c for c in elem if etree.QName(c.tag).localname in ("codeblock", "p")]
             if bad_children:
                 info = etree.Element("info")
                 info.set("class", "- topic/itemgroup task/info ")
@@ -498,29 +549,70 @@ def _fix_content_model(body_xml: str) -> str:
                     elem.append(c)
                 modified = True
 
-        # Fix 5: taskbody element order (prereq, context, steps, result, example)
+        # Fix 5: taskbody element order and forbidden children
         if tag == "taskbody":
-            # Define desired order
+            # 1. Unwrap forbidden <section> children
+            sections = [c for c in elem if etree.QName(c.tag).localname == "section"]
+            for s in sections:
+                # Change section to example if it has a title "Example"
+                s_title = s.find("title")
+                if s_title is not None and s_title.text and "example" in s_title.text.lower():
+                    s.tag = "example"
+                    s.set("class", "- topic/section task/example ")
+                else:
+                    # Unwrap: move children to parent, remove section
+                    idx = list(elem).index(s)
+                    for child in reversed(list(s)):
+                        s.remove(child)
+                        elem.insert(idx, child)
+                    elem.remove(s)
+                modified = True
+
+            # 2. Move direct <p> or <note> or <fig> or <table> children into context or result
+            # DITA Taskbody only allows specific section-like elements.
+            bad_task_children = [c for c in elem if etree.QName(c.tag).localname in ("p", "note", "fig", "table", "ul", "ol", "codeblock")]
+            if bad_task_children:
+                # Find if we have steps
+                steps_idx = -1
+                for i, c in enumerate(elem):
+                    if etree.QName(c.tag).localname in ("steps", "steps-unordered", "steps-informal"):
+                        steps_idx = i
+                        break
+
+                for c in bad_task_children:
+                    idx = list(elem).index(c)
+                    elem.remove(c)
+                    if steps_idx == -1 or idx < steps_idx:
+                        # Move to context
+                        context = elem.find("context")
+                        if context is None:
+                            context = etree.Element("context")
+                            context.set("class", "- topic/section task/context ")
+                            elem.insert(0, context)
+                            # Update steps_idx because we inserted an element
+                            if steps_idx != -1: steps_idx += 1
+                        context.append(c)
+                    else:
+                        # Move to result
+                        result = elem.find("result")
+                        if result is None:
+                            result = etree.Element("result")
+                            result.set("class", "- topic/section task/result ")
+                            elem.append(result)
+                        result.append(c)
+                modified = True
+
+            # 3. Define desired order
             order = ["prereq", "context", "steps", "steps-unordered", "result", "tasktroubleshooting", "example", "postreq"]
             children = list(elem)
-
-            # Sort children based on their tag's position in the order list
-            # elements not in list stay at the end in original relative order
             def get_order(c):
                 t = etree.QName(c.tag).localname if isinstance(c.tag, str) else ""
-                try:
-                    return order.index(t)
-                except ValueError:
-                    return 99
-
+                try: return order.index(t)
+                except ValueError: return 99
             new_children = sorted(children, key=get_order)
-
-            # Check if order actually changed
             if new_children != children:
-                for c in children:
-                    elem.remove(c)
-                for c in new_children:
-                    elem.append(c)
+                for c in children: elem.remove(c)
+                for c in new_children: elem.append(c)
                 modified = True
 
         # Fix 6: No nested sections. DITA forbids <section> inside <section>.
@@ -536,13 +628,24 @@ def _fix_content_model(body_xml: str) -> str:
                         parent.insert(idx, n)
                     modified = True
 
+        # Fix 7: Image href extensions. LLMs sometimes guess .png when it's .jpg
+        if tag == "image":
+            href = elem.get("href")
+            if href and "." in href:
+                base = href.rsplit(".", 1)[0]
+                # We don't have easy access to output_dir here, but we can
+                # normalize extensions if the LLM used a likely wrong one.
+                # Actually, a better place for this is in write_output where
+                # we know the output directory.
+                pass
+
     if not modified:
         return body_xml
 
     # Serialize back, stripping wrapper
-    result = etree.tostring(root, encoding="unicode")
+    result = etree.tostring(root, encoding="unicode", pretty_print=True)
     result = re.sub(r"^<_root>", "", result)
-    result = re.sub(r"</_root>$", "", result)
+    result = re.sub(r"</_root>\s*$", "", result)
     return result
 
 
@@ -581,9 +684,37 @@ def write_output(output_dir: str, doc_title: str,
         # Post-process: fix common DITA content model violations
         body_xml = _fix_content_model(body_xml)
 
+        # Fix image extensions based on what's actually on disk (or in image_dir)
+        # This prevents DOTX008E when LLM guesses .png but it's .jpg
+        image_dir = out / "images"
+        if image_dir.exists():
+            def fix_img_href(m):
+                href = m.group(2)
+                if not (image_dir / href).exists():
+                    base = href.rsplit(".", 1)[0]
+                    for ext in [".jpg", ".jpeg", ".png", ".gif"]:
+                        if (image_dir / (base + ext)).exists():
+                            return f'{m.group(1)}href="{base + ext}"'
+                return m.group(0)
+            body_xml = re.sub(r'(<image[^>]+)href="([^"]+)"', fix_img_href, body_xml)
+
         # Build full topic XML
         full_xml = wrap_dita_topic(title, body_xml, topic_type,
                                    shortdesc=shortdesc, keywords=keywords)
+
+        # Final pretty-print of the entire document
+        try:
+            # Strip DOCTYPE for parsing, then re-add it
+            clean_xml = re.sub(r"<!DOCTYPE[^>]+>", "", full_xml)
+            root = etree.fromstring(clean_xml.encode("utf-8"))
+            pretty_xml = etree.tostring(root, encoding="unicode", pretty_print=True)
+            
+            # Find DOCTYPE from templates
+            tmpl = TOPIC_TEMPLATES.get(topic_type, TOPIC_TEMPLATES["concept"])
+            doctype = tmpl["doctype"]
+            full_xml = f'<?xml version="1.0" encoding="UTF-8"?>\n{doctype}\n{pretty_xml}'
+        except Exception as e:
+            print(f"  ⚠ Final pretty-print failed: {e}")
 
         # Validate well-formedness
         # Need to strip DOCTYPE for lxml parsing (no DTD available locally)
