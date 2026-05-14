@@ -60,7 +60,7 @@ def detect_product_name(sections: list[dict]) -> str | None:
 
 
 def run_pipeline(pdf_path: str, output_dir: str, api_key: str = None,
-                 model: str = "gemini-2.5-pro",
+                 model: str = "gemini-3.1-flash",
                  provider: str = None,
                  dita_ot_path: str = None,
                  copy_images: bool = True) -> dict:
@@ -488,7 +488,7 @@ Supported LLM providers:
   claude   Anthropic Claude (env: ANTHROPIC_API_KEY)
            Models: claude-sonnet-4-20250514, claude-haiku-4-5-20251001
   gemini   Google Gemini   (env: GEMINI_API_KEY)
-           Models: gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash
+           Models: gemini-3.1-flash, gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash
   kimi     Moonshot Kimi   (env: KIMI_API_KEY)
            Models: moonshot-v1-auto, moonshot-v1-8k, moonshot-v1-32k,
                    moonshot-v1-128k, kimi-latest

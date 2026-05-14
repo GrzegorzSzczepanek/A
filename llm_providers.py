@@ -151,10 +151,11 @@ PROVIDERS = {
     },
     "gemini": {
         "env_key": "GEMINI_API_KEY",
-        # Always use the best model (per user directive). Pro is slower per
-        # output token than Flash but smarter and produces fewer repair calls.
-        "default_model": "gemini-2.5-pro",
+        # 3.1 Flash with thinking disabled — fastest path that still produces
+        # valid structured DITA. Pro thinking dominated wall-clock (~86s/topic).
+        "default_model": "gemini-3.1-flash",
         "models": [
+            "gemini-3.1-flash",
             "gemini-2.5-pro",
             "gemini-2.5-flash",
             "gemini-2.0-flash",
@@ -206,7 +207,7 @@ def get_api_key(provider: str, explicit_key: str = None) -> Optional[str]:
 
 
 def get_default_model(provider: str) -> str:
-    return PROVIDERS.get(provider, {}).get("default_model", "gemini-2.5-pro")
+    return PROVIDERS.get(provider, {}).get("default_model", "gemini-3.1-flash")
 
 
 # ── API callers ──────────────────────────────────────────────────────────────
@@ -283,12 +284,19 @@ def _get_or_create_gemini_cache(system: str, api_key: str, model: str) -> Option
     return None
 
 
-def _call_gemini(system: str, user: str, api_key: str, model: str) -> str:
-    """Call Google Gemini API (generateContent endpoint).
+GEMINI_STREAM_PROGRESS = os.environ.get("GEMINI_STREAM_PROGRESS", "1") not in ("0", "false", "")
 
-    Uses context caching for the system instruction when available: this
-    skips re-processing the ~16K-char system prompt on every call, cutting
-    time-to-first-token dramatically for multi-call workflows.
+
+def _call_gemini(system: str, user: str, api_key: str, model: str) -> str:
+    """Call Google Gemini API via streaming endpoint (streamGenerateContent + SSE).
+
+    Streams chunks as they arrive so the caller sees progress instead of a
+    single 60–90s stall. Also disables "thinking" (thinkingBudget=0) on
+    reasoning-capable Flash/Pro models — for structural DITA conversion the
+    model doesn't need to deliberate, and thinking dominates wall-clock.
+
+    Uses context caching for the system instruction when available so the
+    ~16K-char system prompt is only processed once per process.
     """
     headers = {"Content-Type": "application/json"}
     cached_name = _get_or_create_gemini_cache(system, api_key, model)
@@ -296,9 +304,10 @@ def _call_gemini(system: str, user: str, api_key: str, model: str) -> str:
     body = {
         "contents": [{"role": "user", "parts": [{"text": user}]}],
         "generationConfig": {
-            "maxOutputTokens": 16384,
+            "maxOutputTokens": 8192,
             "temperature": 0.0,
             "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     if cached_name:
@@ -308,28 +317,95 @@ def _call_gemini(system: str, user: str, api_key: str, model: str) -> str:
 
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
-        f":generateContent?key={api_key}"
+        f":streamGenerateContent?alt=sse&key={api_key}"
     )
     payload = json.dumps(body).encode()
 
-    data = _post_json(url, payload, headers)
+    chunks: list[str] = []
+    err: Optional[dict] = None
 
-    # Extract text from Gemini response
-    try:
-        candidates = data.get("candidates", [])
-        if candidates:
-            parts = candidates[0].get("content", {}).get("parts", [])
-            return "".join(p.get("text", "") for p in parts)
-    except (IndexError, KeyError, TypeError):
-        pass
+    def _consume(line: str) -> None:
+        nonlocal err
+        if not line.startswith("data:"):
+            return
+        data_str = line[5:].strip()
+        if not data_str:
+            return
+        try:
+            evt = json.loads(data_str)
+        except json.JSONDecodeError:
+            return
+        if isinstance(evt, dict) and "error" in evt:
+            err = evt["error"]
+            return
+        for cand in evt.get("candidates", []) or []:
+            for part in cand.get("content", {}).get("parts", []) or []:
+                text = part.get("text")
+                if text:
+                    chunks.append(text)
+                    if GEMINI_STREAM_PROGRESS:
+                        # Single dot per chunk — flushes so terminal shows live progress.
+                        print(".", end="", flush=True)
 
-    # Check for error
-    if "error" in data:
-        raise RuntimeError(
-            f"Gemini API error: {data['error'].get('message', data['error'])}"
-        )
+    _stream_post_sse(url, payload, headers, on_line=_consume)
 
-    return ""
+    if GEMINI_STREAM_PROGRESS and chunks:
+        print(flush=True)
+
+    if err:
+        raise RuntimeError(f"Gemini API error: {err.get('message', err)}")
+
+    return "".join(chunks)
+
+
+def _stream_post_sse(url: str, payload: bytes, headers: dict, on_line,
+                     timeout: int = 120) -> None:
+    """POST and consume an SSE stream line-by-line, with retry/backoff
+    semantics mirroring `_post_json`. Calls `on_line(str)` for each line."""
+    global _last_call_ts
+    with _call_lock:
+        elapsed = time.monotonic() - _last_call_ts
+        if elapsed < MIN_INTER_CALL_GAP:
+            time.sleep(MIN_INTER_CALL_GAP - elapsed)
+        _last_call_ts = time.monotonic()
+
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            req = urllib.request.Request(
+                url, data=payload, headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if line:
+                        on_line(line)
+            return
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code not in RETRY_STATUSES or attempt == MAX_RETRIES - 1:
+                raise
+            body_hint = None
+            try:
+                err_body = e.read().decode(errors="replace")
+                m = _GEMINI_RETRY_RE.search(err_body)
+                if m:
+                    body_hint = m.group(1)
+            except Exception:
+                pass
+            time.sleep(_retry_delay(
+                attempt,
+                e.headers.get("Retry-After") or body_hint,
+                is_rate_limit=(e.code == 429),
+            ))
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last_error = e
+            if attempt == MAX_RETRIES - 1:
+                raise
+            time.sleep(_retry_delay(attempt, None))
+    if last_error:
+        raise last_error
+    raise RuntimeError("retry loop exited without result")
 
 
 def _call_kimi(system: str, user: str, api_key: str, model: str) -> str:

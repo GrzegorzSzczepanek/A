@@ -349,7 +349,7 @@ def _section_to_prompt(title: str, blocks: list[Block], doc_title: str = "",
 
 
 def _call_llm_api(system: str, user: str, api_key: str,
-                  model: str = "gemini-2.5-pro",
+                  model: str = "gemini-3.1-flash",
                   provider: str = None) -> str:
     """Call LLM API via provider abstraction. Returns text response."""
     from llm_providers import call_llm
@@ -358,7 +358,7 @@ def _call_llm_api(system: str, user: str, api_key: str,
 
 def classify_section(title: str, blocks: list[Block], api_key: str,
                      doc_title: str = "", all_section_titles: list[str] = None,
-                     model: str = "gemini-2.5-pro",
+                     model: str = "gemini-3.1-flash",
                      provider: str = None,
                      use_cache: bool = True,
                      product_name: str = None,
@@ -553,7 +553,7 @@ Return ONLY a JSON array (no markdown fences):
 
 
 def plan_topics(sections: list[dict], api_key: str,
-                model: str = "gemini-2.5-pro",
+                model: str = "gemini-3.1-flash",
                 provider: str = None) -> list[dict]:
     """
     Plan how sections should be grouped into DITA topics.
