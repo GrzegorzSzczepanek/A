@@ -82,7 +82,9 @@ Seven stages, left to right:
 ### LLM Call: Classification + Semantic Annotation
 
 - **Provider**: configurable via `--provider` flag. Supports Claude (Anthropic), Gemini (Google), Kimi/Moonshot.
-- **Default**: Kimi `moonshot-v1-32k` (large enough for our ~16K-char system prompt with worked example + content; cost-effective; reliable global endpoint).
+- **Default**: Gemini `gemini-2.5-pro` (best-quality model in the Gemini family). The 16K-char system prompt is registered as a Gemini cachedContents resource on first call within a process, so subsequent calls skip re-processing the prompt and pay only for the user-message + output. Cache TTL is 5 minutes which comfortably covers a single PDF batch.
+- **Topic planning is skipped entirely when a PDF has only ONE section** - heuristic grouping is guaranteed-correct there, saving one LLM round-trip.
+- **Classify calls run in parallel** across topics via `ThreadPoolExecutor` (max 4 workers), gated by a process-wide throttle (`MIN_INTER_CALL_GAP = 0.5s`) that keeps concurrent calls comfortably within Gemini Pro's RPM window.
 - **Input**: section title + raw content blocks with type tags + product name + topic-filename map.
 - **Output**: structured JSON: `{topic_type, body_xml, reasoning}`.
 - **Temperature**: 0.0 for deterministic re-runs.
@@ -204,8 +206,8 @@ End-to-end pipeline on `Sample File: Manage 2a-7 Processing.pdf`:
 ./setup.sh
 source ~/.zshrc  # picks up JAVA_HOME + DITA-OT on PATH
 
-# Single PDF
-python3 main.py path/to/input.pdf -o output/ --provider kimi --model moonshot-v1-32k
+# Single PDF (defaults to Gemini 2.5 Pro)
+python3 main.py path/to/input.pdf -o output/
 
 # Batch over a directory of PDFs (writes per-file logs and TSV summary)
 ./test_runner.sh path/to/pdfs/ output/batch/

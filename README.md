@@ -38,8 +38,8 @@ echo 'KIMI_API_KEY=sk-...'        >> .env
 echo 'GEMINI_API_KEY=AIza...'     >> .env
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> .env
 
-# 3. Convert a PDF
-python3 main.py "Sample File.pdf" -o output/sample --provider kimi --model moonshot-v1-32k
+# 3. Convert a PDF (defaults to Gemini 2.5 Pro)
+python3 main.py "Sample File.pdf" -o output/sample
 
 # 4. Validate with DITA-OT (use absolute path; DITA-OT resolves relative paths from its plugin dir, not CWD)
 dita -i "$PWD/output/sample/m_*.ditamap" -f html5 -o /tmp/html5 --processing-mode=strict
@@ -51,9 +51,9 @@ The pipeline supports three LLM backends. Provider is auto-detected from the mod
 
 | Provider | Env variable | Default model | Notes |
 |----------|-------------|---------------|-------|
-| Kimi | `KIMI_API_KEY` | `moonshot-v1-32k` | Default for this project. Reliable, ~16K-char system prompt fits comfortably. |
-| Gemini | `GEMINI_API_KEY` | `gemini-2.5-flash` | Free tier 20 RPM (easy to exhaust during testing). |
-| Claude | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` | Premium quality. |
+| Gemini   | `GEMINI_API_KEY` | `gemini-2.5-pro` | **Default for this project.** Best quality model. Uses context caching for the 16K system prompt (5 min TTL). |
+| Kimi     | `KIMI_API_KEY`   | `moonshot-v1-32k` | Fallback only. Significantly slower in our testing. |
+| Claude   | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` | Fallback only. |
 
 Retries on 429/5xx are automatic. Provider Retry-After headers are honored. Gemini's "retry in X.Xs" body hint is also parsed.
 
