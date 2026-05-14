@@ -117,11 +117,24 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
     provider = config["provider"]
 
     try:
-        # Stage 1: Parse PDF, then delete the uploaded source (we extracted
-        # what we need; no reason to retain user uploads on disk).
+        # Stage 1: Parse PDF, capture doc title (also from the PDF file), and
+        # then delete the uploaded source. detect_doc_title() reopens the PDF,
+        # so it MUST run before we unlink — otherwise Stage 5 fails with
+        # FileNotFoundError after the parse already consumed the upload.
         t0 = time.time()
         img_dir = str(out_dir / "images")
         blocks = parse_pdf(str(pdf_path), img_dir)
+        from main import detect_doc_title
+        doc_title = detect_doc_title(str(pdf_path))
+        # If PDF had no metadata title, detect_doc_title falls back to the
+        # *path stem*, which still carries our uuid prefix (e.g.
+        # "7e1233ea_synthetic_alert_system"). Re-derive from the original
+        # client-supplied filename instead.
+        from pathlib import Path as _P
+        orig_stem = _P(filename or "document").stem
+        prefixed_stem = pdf_path.stem
+        if doc_title == prefixed_stem.replace("_", " ").replace("-", " ").title():
+            doc_title = orig_stem.replace("_", " ").replace("-", " ").title()
         try:
             pdf_path.unlink()
         except (OSError, FileNotFoundError):
@@ -250,10 +263,9 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
             "mode": "LLM" if api_key else "heuristic",
         })
 
-        # Stage 5: Write output
+        # Stage 5: Write output (doc_title was captured in Stage 1 before unlink)
         t0 = time.time()
-        from main import detect_doc_title, detect_product_name
-        doc_title = detect_doc_title(str(pdf_path))
+        from main import detect_product_name
         product_name = detect_product_name(sections)
 
         write_result = write_output(
