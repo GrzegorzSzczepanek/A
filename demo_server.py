@@ -40,10 +40,26 @@ app = FastAPI(title="PDF-to-DITA Converter")
 
 # Store results per session
 RESULTS = {}
-UPLOAD_DIR = Path("demo_uploads")
-OUTPUT_DIR = Path("demo_output")
+# Use /tmp so uploads + outputs are ephemeral (OS cleans /tmp on reboot, and
+# we delete the upload file right after parsing). No long-term storage.
+UPLOAD_DIR = Path(tempfile.gettempdir()) / "pdf2dita_uploads"
+OUTPUT_DIR = Path(tempfile.gettempdir()) / "pdf2dita_output"
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+# TTL cleanup: remove session output dirs older than 1 hour at process start.
+# Keeps disk clean without affecting active sessions.
+_SESSION_TTL_SECONDS = 3600
+try:
+    _now = time.time()
+    for _sess in OUTPUT_DIR.iterdir():
+        if _sess.is_dir() and _now - _sess.stat().st_mtime > _SESSION_TTL_SECONDS:
+            shutil.rmtree(_sess, ignore_errors=True)
+    for _up in UPLOAD_DIR.iterdir():
+        if _up.is_file() and _now - _up.stat().st_mtime > _SESSION_TTL_SECONDS:
+            _up.unlink(missing_ok=True)
+except Exception:
+    pass
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -86,10 +102,15 @@ def _convert_pdf_sync(pdf_path: str, filename: str):
     provider = config["provider"]
 
     try:
-        # Stage 1: Parse PDF
+        # Stage 1: Parse PDF, then delete the uploaded source (we extracted
+        # what we need; no reason to retain user uploads on disk).
         t0 = time.time()
         img_dir = str(out_dir / "images")
         blocks = parse_pdf(str(pdf_path), img_dir)
+        try:
+            pdf_path.unlink()
+        except (OSError, FileNotFoundError):
+            pass
         block_summary = {}
         for b in blocks:
             block_summary[b.type] = block_summary.get(b.type, 0) + 1
