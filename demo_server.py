@@ -63,9 +63,31 @@ except Exception:
     pass
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# Register .jsx as a JavaScript MIME type so Babel-standalone's fetcher
+# doesn't reject the files. mimetypes guesses text/plain otherwise, which
+# some browsers refuse for `<script src=...>`.
+import mimetypes
+mimetypes.add_type("text/javascript", ".jsx")
+
+# Serve the new Claude-Design React UI from /static/*. The root path serves
+# the index.html that loads all the .jsx files via Babel standalone.
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    # New UI lives in static/index.html and loads sibling .jsx/.js files from
+    # the same directory. Falls back to the legacy demo_ui.html if static is
+    # missing (e.g. fresh clone before the asset copy step).
+    idx = STATIC_DIR / "index.html"
+    if idx.exists():
+        return idx.read_text()
     return Path("demo_ui.html").read_text()
+
+
 
 
 def _safe_upload_path(filename: str) -> Path:
