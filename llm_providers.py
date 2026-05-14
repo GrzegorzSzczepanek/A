@@ -154,9 +154,9 @@ PROVIDERS = {
         "env_key": "GEMINI_API_KEY",
         # 3.1 Flash with thinking disabled — fastest path that still produces
         # valid structured DITA. Pro thinking dominated wall-clock (~86s/topic).
-        "default_model": "gemini-3.1-flash",
+        "default_model": "gemini-3.1-flash-lite",
         "models": [
-            "gemini-3.1-flash",
+            "gemini-3.1-flash-lite",
             "gemini-2.5-pro",
             "gemini-2.5-flash",
             "gemini-2.0-flash",
@@ -208,7 +208,7 @@ def get_api_key(provider: str, explicit_key: str = None) -> Optional[str]:
 
 
 def get_default_model(provider: str) -> str:
-    return PROVIDERS.get(provider, {}).get("default_model", "gemini-3.1-flash")
+    return PROVIDERS.get(provider, {}).get("default_model", "gemini-3.1-flash-lite")
 
 
 # ── API callers ──────────────────────────────────────────────────────────────
