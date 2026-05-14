@@ -1,0 +1,45 @@
+# Secrets / API keys
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pipeline runtime outputs (generated per-run, not committed)
+output/
+demo_output/
+demo_uploads/
+.cache/
+html5_output/
+
+# Test PDFs are large and downloaded on demand (keep the script, not the bytes)
+test_pdfs/*.pdf
+
+# Logs
+*.log
+/tmp/pipeline*.log
+
+# Memory directory (Claude Code session memory, not source)
+memory/
+
+# Per-user Claude Code permission allowlist
+.claude/

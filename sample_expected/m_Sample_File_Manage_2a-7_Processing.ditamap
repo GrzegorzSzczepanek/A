@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<map id="ditamap-5203" class="- map/map "><title class="- topic/title ">Sample File: Manage 2a-7 Processing</title><topicref href="c_manage_2a7_processing.dita" class="- map/topicref "/><topicref href="t_set_up_mf_for_2a7_processing.dita" class="- map/topicref "/><topicref href="r_2a7_processing_settings_.dita" class="- map/topicref "/><keydef keys="product-name" class="+ map/topicref mapgroup-d/keydef "><topicmeta class="- map/topicmeta "><keywords class="- topic/keywords "><keyword class="- topic/keyword ">ABC</keyword></keywords></topicmeta></keydef></map>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE reference PUBLIC "-//OASIS//DTD DITA Reference//EN" "reference.dtd">
+<reference id="reference-6385" class="- topic/topic       reference/reference "><title class="- topic/title ">2a-7 Processing Settings</title><refbody class="- topic/body        reference/refbody "><section class="- topic/section ">
+                <table class="- topic/table "><tgroup cols="3" class="- topic/tgroup "><colspec colname="c1" colnum="1" class="- topic/colspec "/><colspec colname="c2" colnum="2" class="- topic/colspec "/><colspec colname="c3" colnum="3" class="- topic/colspec "/><thead class="- topic/thead "><row class="- topic/row "><entry class="- topic/entry ">Field Name</entry><entry class="- topic/entry ">Tag</entry><entry class="- topic/entry ">Description</entry></row></thead><tbody class="- topic/tbody "><row class="- topic/row "><entry class="- topic/entry "><uicontrol class="+ topic/ph ui-d/uicontrol ">Master Fund Type</uicontrol></entry><entry class="- topic/entry ">7584</entry><entry class="- topic/entry ">Indicates that the entity is a money market fund</entry></row><row class="- topic/row "><entry class="- topic/entry "><uicontrol class="+ topic/ph ui-d/uicontrol ">Money Market Type</uicontrol></entry><entry class="- topic/entry ">5342</entry><entry class="- topic/entry ">
+                                    <p class="- topic/p ">Specifies the type of money market fund for the master fund.</p>
+                                    <p class="- topic/p ">Options include:</p>
+                                    <ul class="- topic/ul "><li class="- topic/li ">
+                                            <p class="- topic/p "><option class="+ topic/keyword pr-d/option ">CNAV</option> (Constant Net Asset Value Fund)</p>
+                                        </li><li class="- topic/li ">
+                                            <p class="- topic/p "><option class="+ topic/keyword pr-d/option ">IMMM </option>(Institutional Municipal Money Market)</p>
+                                        </li><li class="- topic/li ">
+                                            <p class="- topic/p "><option class="+ topic/keyword pr-d/option ">IPMM </option>(Institutional Prime Money Market)</p>
+                                        </li><li class="- topic/li ">
+                                            <p class="- topic/p "><option class="+ topic/keyword pr-d/option ">LVNAV</option> (Low Volatility Net Asset Value Fund)</p>
+                                        </li><li class="- topic/li ">
+                                            <p class="- topic/p "><option class="+ topic/keyword pr-d/option ">VNAV</option> (Variable Net Asset Value Fund)</p>
+                                        </li></ul>
+                                </entry></row><row class="- topic/row "><entry class="- topic/entry "><uicontrol class="+ topic/ph ui-d/uicontrol ">Source Fields</uicontrol></entry><entry class="- topic/entry "/><entry class="- topic/entry "/></row><row class="- topic/row "><entry class="- topic/entry "><uicontrol class="+ topic/ph ui-d/uicontrol ">Entity Source Rule</uicontrol></entry><entry class="- topic/entry ">6431</entry><entry class="- topic/entry ">Specifies the entity source rule to use with the master fund. The source associated with the selected entity source rule appears, and you cannot change it.</entry></row><row class="- topic/row "><entry class="- topic/entry "><uicontrol class="+ topic/ph ui-d/uicontrol ">2A7 Price Source</uicontrol></entry><entry class="- topic/entry ">9051</entry><entry class="- topic/entry "> Displays the source that the system uses for evaluating cost against market value for 2a-7 processing.</entry></row></tbody></tgroup></table>
+        </section></refbody></reference>

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF-to-DITA Converter</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0e17; --surface: #111827; --surface2: #1a2332;
+    --border: #2a3444; --text: #e2e8f0; --muted: #8899aa;
+    --accent: #3b82f6; --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+    --concept: #8b5cf6; --task: #06b6d4; --reference: #f97316;
+  }
+  body { font-family: 'IBM Plex Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+  h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+  .subtitle span { color: var(--accent); }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 3rem;
+    text-align: center; cursor: pointer; transition: all 0.2s;
+    background: var(--surface);
+  }
+  .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: var(--surface2); }
+  .upload-zone h3 { margin-bottom: 0.5rem; }
+  .upload-zone p { color: var(--muted); font-size: 0.85rem; }
+  .upload-zone input { display: none; }
+
+  /* Progress */
+  .pipeline { margin: 2rem 0; }
+  .stage { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-left: 3px solid var(--border); margin-left: 8px; font-size: 0.9rem; }
+  .stage.done { border-color: var(--green); }
+  .stage.active { border-color: var(--accent); }
+  .stage.error { border-color: var(--red); }
+  .stage-icon { width: 20px; text-align: center; flex-shrink: 0; }
+  .stage-name { font-weight: 500; min-width: 140px; }
+  .stage-detail { color: var(--muted); font-size: 0.8rem; flex: 1; }
+  .stage-time { color: var(--muted); font-size: 0.75rem; font-family: 'IBM Plex Mono', monospace; }
+
+  /* Metrics row */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 1.5rem 0; }
+  .metric-card { background: var(--surface); border-radius: 8px; padding: 1rem; border: 1px solid var(--border); }
+  .metric-card .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .metric-card .value { font-size: 1.4rem; font-weight: 600; margin-top: 4px; }
+  .metric-card .value.ok { color: var(--green); }
+
+  /* File tabs */
+  .file-tabs { display: flex; gap: 2px; margin-top: 2rem; flex-wrap: wrap; }
+  .file-tab {
+    padding: 8px 16px; font-size: 0.8rem; border: none; cursor: pointer;
+    border-radius: 8px 8px 0 0; font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface); color: var(--muted); transition: all 0.15s;
+  }
+  .file-tab:hover { color: var(--text); }
+  .file-tab.active { background: var(--surface2); color: var(--text); }
+  .file-tab .type-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .file-tab .type-dot.concept { background: var(--concept); }
+  .file-tab .type-dot.task { background: var(--task); }
+  .file-tab .type-dot.reference { background: var(--reference); }
+  .file-tab .type-dot.ditamap { background: var(--amber); }
+
+  /* Code viewer */
+  .code-viewer {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 0 8px 8px 8px;
+    padding: 1.25rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem;
+    line-height: 1.7; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+    max-height: 500px; overflow-y: auto;
+  }
+  .xml-tag { color: #7dd3fc; }
+  .xml-attr { color: #c4b5fd; }
+  .xml-val { color: #86efac; }
+  .xml-text { color: var(--text); }
+  .xml-doctype { color: var(--muted); }
+
+  /* Plan visualization */
+  .topic-plan { display: flex; gap: 12px; margin: 1.5rem 0; flex-wrap: wrap; }
+  .topic-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px; flex: 1; min-width: 200px;
+  }
+  .topic-card h4 { font-size: 0.85rem; margin-bottom: 6px; }
+  .topic-card .type-badge {
+    display: inline-block; font-size: 0.65rem; padding: 2px 8px;
+    border-radius: 4px; font-weight: 500; text-transform: uppercase;
+  }
+  .type-badge.concept { background: rgba(139,92,246,0.15); color: var(--concept); }
+  .type-badge.task { background: rgba(6,182,212,0.15); color: var(--task); }
+  .type-badge.reference { background: rgba(249,115,22,0.15); color: var(--reference); }
+  .topic-card .sections { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+
+  .hidden { display: none; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-msg { color: var(--red); background: rgba(239,68,68,0.1); padding: 1rem; border-radius: 8px; margin: 1rem 0; font-size: 0.85rem; }
+
+  /* Download links */
+  .dl-link {
+    padding: 6px 12px; font-size: 0.78rem; font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; text-decoration: none; transition: all 0.15s;
+  }
+  .dl-link:hover { background: var(--surface2); border-color: var(--accent); color: var(--accent); }
+  .dl-link.dl-zip { background: var(--accent); color: white; border-color: var(--accent); font-weight: 500; }
+  .dl-link.dl-zip:hover { background: #2563eb; color: white; }
+
+  /* Result cards (one per upload) */
+  #resultsContainer { display: flex; flex-direction: column; gap: 1.5rem; margin-top: 2rem; }
+  .result-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  }
+  .card-header {
+    display: flex; align-items: center; gap: 12px; padding: 14px 18px;
+    background: var(--surface2); border-bottom: 1px solid var(--border);
+  }
+  .card-filename {
+    flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 0.9rem;
+    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .card-elapsed {
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem;
+    color: var(--muted); padding: 2px 8px; background: var(--surface);
+    border-radius: 4px; min-width: 70px; text-align: right;
+  }
+  .card-close {
+    background: transparent; border: none; color: var(--muted);
+    font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 0 6px;
+    transition: color 0.15s;
+  }
+  .card-close:hover { color: var(--red); }
+  .card-body { padding: 14px 18px; }
+  .card-body #downloadBar, .card-body [id$="-downloads"] {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 1rem 0; align-items: center;
+  }
+  .card-error {
+    color: var(--red); background: rgba(239,68,68,0.1);
+    padding: 1rem; border-radius: 8px; margin: 1rem 0; font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>PDF-to-DITA Converter</h1>
+  <p class="subtitle">BNY AI in Finance Hackathon <span>|</span> Automated documentation conversion tool</p>
+
+  <div class="upload-zone" id="dropzone">
+    <h3>Drop one or more PDFs here</h3>
+    <p>or click to browse &mdash; multiple files run in parallel, results stack below</p>
+    <input type="file" id="fileInput" accept=".pdf" multiple>
+  </div>
+
+  <div id="resultsContainer"></div>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const resultsContainer = document.getElementById('resultsContainer');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('dragover');
+  for (const f of e.dataTransfer.files) handleFile(f);
+});
+fileInput.addEventListener('change', e => {
+  for (const f of e.target.files) handleFile(f);
+  e.target.value = '';  // allow re-uploading the same file
+});
+
+let cardCounter = 0;
+
+function makeCard(file) {
+  const idx = ++cardCounter;
+  const card = document.createElement('div');
+  card.className = 'result-card';
+  card.id = 'card-' + idx;
+  card.innerHTML =
+    '<div class="card-header">' +
+      '<span class="card-filename">' + escapeHtml(file.name) + '</span>' +
+      '<span class="card-elapsed" id="card-' + idx + '-elapsed">0s</span>' +
+      '<button class="card-close" onclick="document.getElementById(\'card-' + idx + '\').remove()">×</button>' +
+    '</div>' +
+    '<div class="card-body">' +
+      '<div class="pipeline" id="card-' + idx + '-stages"></div>' +
+      '<div class="metrics" id="card-' + idx + '-metrics"></div>' +
+      '<div id="card-' + idx + '-plan" class="hidden">' +
+        '<h3 style="font-size:0.9rem;color:var(--muted);margin:8px 0">Topic plan</h3>' +
+        '<div class="topic-plan" id="card-' + idx + '-planList"></div>' +
+      '</div>' +
+      '<div id="card-' + idx + '-downloads"></div>' +
+      '<div class="file-tabs" id="card-' + idx + '-tabs"></div>' +
+      '<div class="code-viewer" id="card-' + idx + '-viewer"></div>' +
+      '<div class="card-error hidden" id="card-' + idx + '-error"></div>' +
+    '</div>';
+  resultsContainer.insertBefore(card, resultsContainer.firstChild);
+  return idx;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function handleFile(file) {
+  if (!file.name.endsWith('.pdf')) { alert('Please upload a PDF file: ' + file.name); return; }
+
+  const idx = makeCard(file);
+  const stagesEl = document.getElementById('card-' + idx + '-stages');
+  const elapsedEl = document.getElementById('card-' + idx + '-elapsed');
+  const errorEl = document.getElementById('card-' + idx + '-error');
+
+  stagesEl.innerHTML = '<div class="stage active">' +
+    '<span class="stage-icon"><span class="spinner"></span></span>' +
+    '<span class="stage-name">Processing...</span>' +
+    '<span class="stage-detail" style="color:var(--muted)">multi-topic PDFs take 1-3 min; repair loops add ~30s each</span></div>';
+
+  const startTs = Date.now();
+  const tickHandle = setInterval(() => {
+    elapsedEl.textContent = Math.floor((Date.now() - startTs) / 1000) + 's';
+  }, 1000);
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    const resp = await fetch('/convert', { method: 'POST', body: form });
+    clearInterval(tickHandle);
+    const data = await resp.json();
+    elapsedEl.textContent = Math.floor((Date.now() - startTs) / 1000) + 's (done)';
+
+    if (data.error) {
+      errorEl.innerHTML = '<strong>Error:</strong> ' + escapeHtml(data.error);
+      errorEl.classList.remove('hidden');
+      stagesEl.innerHTML = '';
+      return;
+    }
+
+    renderStages(idx, data.stages);
+    renderMetrics(idx, data.metrics);
+    renderPlan(idx, data.plan);
+    renderFiles(idx, data.files, data.session_id);
+
+  } catch (err) {
+    clearInterval(tickHandle);
+    elapsedEl.textContent = Math.floor((Date.now() - startTs) / 1000) + 's (failed)';
+    errorEl.innerHTML = '<strong>Network error:</strong> ' + escapeHtml(err.message);
+    errorEl.classList.remove('hidden');
+    stagesEl.innerHTML = '';
+  }
+}
+
+function renderStages(idx, stages) {
+  const el = document.getElementById('card-' + idx + '-stages');
+  el.innerHTML = stages.map(s => {
+    const icon = s.status === 'done' ? '&#10003;' : s.status === 'error' ? '&#10007;' : '...';
+    const iconColor = s.status === 'done' ? 'var(--green)' : s.status === 'error' ? 'var(--red)' : 'var(--muted)';
+    const mode = s.mode ? ' <span style="color:var(--accent);font-size:0.7rem">[' + s.mode + ']</span>' : '';
+    return '<div class="stage ' + s.status + '">' +
+      '<span class="stage-icon" style="color:' + iconColor + '">' + icon + '</span>' +
+      '<span class="stage-name">' + s.name + mode + '</span>' +
+      '<span class="stage-time">' + s.time + 's</span></div>';
+  }).join('');
+}
+
+function renderMetrics(idx, m) {
+  const el = document.getElementById('card-' + idx + '-metrics');
+  const cards = [
+    { label: 'Topics', value: m.topics_generated },
+    { label: 'XML valid', value: m.xml_valid + '/' + m.xml_total, ok: m.xml_valid === m.xml_total },
+    { label: '@class', value: m.class_coverage, ok: true },
+    { label: 'Time', value: m.processing_time + 's' },
+    { label: 'Mode', value: m.mode },
+    { label: 'Errors', value: m.errors.length, ok: m.errors.length === 0 },
+  ];
+  el.innerHTML = cards.map(c =>
+    '<div class="metric-card"><div class="label">' + c.label + '</div>' +
+    '<div class="value' + (c.ok ? ' ok' : '') + '">' + c.value + '</div></div>'
+  ).join('');
+}
+
+function renderPlan(idx, plan) {
+  if (!plan || !plan.length) return;
+  const section = document.getElementById('card-' + idx + '-plan');
+  section.classList.remove('hidden');
+  const el = document.getElementById('card-' + idx + '-planList');
+  el.innerHTML = plan.map(p =>
+    '<div class="topic-card"><span class="type-badge ' + p.type + '">' + p.type + '</span>' +
+    '<h4>' + escapeHtml(p.title) + '</h4>' +
+    '<div class="sections">' + p.sections.map(escapeHtml).join(' + ') + '</div></div>'
+  ).join('');
+}
+
+function renderFiles(idx, files, sessionId) {
+  const tabs = document.getElementById('card-' + idx + '-tabs');
+  const viewer = document.getElementById('card-' + idx + '-viewer');
+  const dlBar = document.getElementById('card-' + idx + '-downloads');
+  const names = Object.keys(files);
+
+  dlBar.innerHTML = '<strong style="font-size:0.85rem;color:var(--muted);margin-right:6px">Download:</strong>' +
+    names.map(n => '<a class="dl-link" href="/file/' + sessionId + '/' + encodeURIComponent(n) + '" download>' + n + '</a>').join('') +
+    (sessionId ? '<a class="dl-link dl-zip" href="/zip/' + sessionId + '" download>all as .zip</a>' : '');
+
+  tabs.innerHTML = names.map((name, i) => {
+    let type = 'ditamap';
+    if (name.startsWith('c_')) type = 'concept';
+    else if (name.startsWith('t_')) type = 'task';
+    else if (name.startsWith('r_')) type = 'reference';
+    return '<button class="file-tab' + (i === 0 ? ' active' : '') + '" data-file="' + name + '">' +
+      '<span class="type-dot ' + type + '"></span>' + name + '</button>';
+  }).join('');
+
+  if (names.length) viewer.innerHTML = highlightXML(files[names[0]]);
+
+  tabs.querySelectorAll('.file-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.querySelectorAll('.file-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      viewer.innerHTML = highlightXML(files[tab.dataset.file]);
+    });
+  });
+}
+
+function highlightXML(xml) {
+  return xml
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/(&lt;\?xml[^?]*\?&gt;)/g, '<span class="xml-doctype">$1</span>')
+    .replace(/(&lt;!DOCTYPE[^&]*&gt;)/g, '<span class="xml-doctype">$1</span>')
+    .replace(/(&lt;\/?)([\w:-]+)/g, '$1<span class="xml-tag">$2</span>')
+    .replace(/([\w:-]+)(=)(&quot;|")/g, '<span class="xml-attr">$1</span>$2$3')
+    .replace(/(&quot;|")(.*?)(&quot;|")/g, '"<span class="xml-val">$2</span>"');
+}
+</script>
+</body>
+</html>

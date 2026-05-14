@@ -1,0 +1,8 @@
+pdfplumber>=0.11.0
+pypdf>=4.0.0
+lxml>=5.0.0
+python-dotenv>=1.0.0
+# Web demo (optional)
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9
