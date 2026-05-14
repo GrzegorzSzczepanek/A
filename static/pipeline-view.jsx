@@ -21,7 +21,7 @@ function PipelineView({ stages, logs, onComplete }) {
   }, [allDone]);
 
   const now = new Date();
-  const timeBase = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  const timeBase = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   return (
     <div className="view-enter" style={{ maxWidth: 800, margin: '0 auto' }}>
@@ -62,11 +62,10 @@ function PipelineView({ stages, logs, onComplete }) {
           <div className="pipeline-stepper">
             {stages.map((stage, i) => (
               <div className="pipeline-stage" key={stage.id}>
-                <div className={`pipeline-node ${
-                  stage.status === 'active' ? 'pipeline-node--active' :
+                <div className={`pipeline-node ${stage.status === 'active' ? 'pipeline-node--active' :
                   stage.status === 'done' ? 'pipeline-node--done' :
-                  stage.status === 'error' ? 'pipeline-node--error' : ''
-                }`}>
+                    stage.status === 'error' ? 'pipeline-node--error' : ''
+                  }`}>
                   {stage.status === 'done' ? (
                     <IconCheck />
                   ) : (
@@ -116,7 +115,7 @@ function PipelineView({ stages, logs, onComplete }) {
           <div className="log-panel">
             {logs.map((log, i) => (
               <div className="log-entry" key={i}>
-                <span className="log-time">[{timeBase}:{String(i * 3 + 1).padStart(2,'0')}]</span>
+                <span className="log-time">[{timeBase}:{String(i * 3 + 1).padStart(2, '0')}]</span>
                 <span className="log-stage">{log.stage}</span>
                 <span className="log-msg">{log.msg}</span>
               </div>

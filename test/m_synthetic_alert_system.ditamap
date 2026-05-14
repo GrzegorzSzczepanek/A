@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<map id="ditamap-4651b3b7" class="- map/map ">
+<title class="- topic/title ">Synthetic Alert System</title>
+<topicref href="c_configure_alert_system.dita" class="- map/topicref "/>
+<topicref href="r_alert_priority_settings.dita" class="- map/topicref "/>
+<topicref href="t_set_up_email_notifications.dita" class="- map/topicref "/>
+</map>
