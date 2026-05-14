@@ -44,8 +44,8 @@ RESULTS = {}
 # we delete the upload file right after parsing). No long-term storage.
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "pdf2dita_uploads"
 OUTPUT_DIR = Path(tempfile.gettempdir()) / "pdf2dita_output"
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # TTL cleanup: remove session output dirs older than 1 hour at process start.
 # Keeps disk clean without affecting active sessions.
@@ -67,13 +67,28 @@ async def index():
     return Path("demo_ui.html").read_text()
 
 
+def _safe_upload_path(filename: str) -> Path:
+    """Build a collision-free, traversal-safe upload path.
+
+    Two clients can upload the same `file.filename` simultaneously, and one
+    request's post-parse `unlink()` would then delete the other's file mid-
+    parse. We prefix every upload with a uuid4 so the two paths never
+    collide. Also strips directory components from the user-supplied name
+    so a malicious `../foo.pdf` can't write outside UPLOAD_DIR.
+    """
+    import uuid
+    base = Path(filename or "upload.pdf").name  # strip any directory parts
+    return UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{base}"
+
+
 @app.post("/convert")
 async def convert_pdf(file: UploadFile = File(...)):
     """Upload and convert a PDF to DITA."""
     # Read upload in the async handler, then offload the rest to a worker
     # thread via run_in_threadpool so multiple uploads can run in parallel.
     content = await file.read()
-    pdf_path = UPLOAD_DIR / file.filename
+    pdf_path = _safe_upload_path(file.filename)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)  # defensive: dir may have been pruned
     with open(pdf_path, "wb") as f:
         f.write(content)
 
