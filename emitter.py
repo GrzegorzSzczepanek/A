@@ -492,7 +492,7 @@ def write_output(output_dir: str, doc_title: str,
                  classified_sections: list[dict],
                  product_name: str = None,
                  api_key: str = None,
-                 model: str = "gemini-2.5-pro",
+                 model: str = "gemini-3.1-flash",
                  provider: str = None) -> dict:
     """
     Write all DITA files and ditamap to output_dir.
